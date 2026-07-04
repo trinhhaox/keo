@@ -1,0 +1,389 @@
+// Package api là HTTP layer cho mobile app KÈO: ví điểm, danh sách kèo,
+// vào kèo, tiến độ, đổi thưởng. Auth để dạng hook (authUserID) cho khỏi
+// buộc vào cơ chế session/JWT cụ thể.
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"sort"
+	"strconv"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/hao/keo/challenge"
+	"github.com/hao/keo/ledger"
+)
+
+// Catalog đổi thưởng. Skeleton để trong code; bản thật chuyển sang bảng
+// shop_items có tồn kho + trạng thái.
+var Catalog = map[string]struct {
+	Name string
+	Cost int64
+}{
+	"voucher-sport-500k":  {Name: "Voucher cửa hàng thể thao 500k", Cost: 480},
+	"gear-trail-shoes":    {Name: "Giày chạy bộ trail", Cost: 2500},
+	"ticket-hn-marathon":  {Name: "Vé Marathon Hà Nội 2026 · 21km", Cost: 900},
+	"ticket-sg-night-run": {Name: "Vé Night Run Sài Gòn · 10km", Cost: 600},
+}
+
+type Server struct {
+	pool       *pgxpool.Pool
+	ledger     *ledger.PGStore
+	challenges *challenge.Store
+	auth       func(*http.Request) (int64, error)
+}
+
+func NewServer(pool *pgxpool.Pool, l *ledger.PGStore, cs *challenge.Store,
+	auth func(*http.Request) (int64, error)) *Server {
+	return &Server{pool: pool, ledger: l, challenges: cs, auth: auth}
+}
+
+func (s *Server) Routes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/wallet", s.withAuth(s.getWallet))
+	mux.HandleFunc("GET /v1/wallet/transactions", s.withAuth(s.getTransactions))
+	mux.HandleFunc("GET /v1/challenges", s.withAuth(s.listChallenges))
+	mux.HandleFunc("POST /v1/challenges", s.withAuth(s.createChallenge))
+	mux.HandleFunc("POST /v1/challenges/{id}/join", s.withAuth(s.joinChallenge))
+	mux.HandleFunc("GET /v1/me/challenges", s.withAuth(s.myChallenges))
+	mux.HandleFunc("POST /v1/redemptions", s.withAuth(s.redeem))
+	mux.HandleFunc("GET /v1/shop", s.withAuth(s.shop))
+}
+
+// RegisterDevRoutes gắn các endpoint CHỈ DÙNG KHI DEV (DEV_MODE=1):
+// tạo user nhanh không cần hệ thống auth thật.
+func (s *Server) RegisterDevRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/auth/dev-login", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			DisplayName string `json:"display_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.DisplayName == "" {
+			httpError(w, http.StatusBadRequest, "cần display_name")
+			return
+		}
+		var userID int64
+		if err := s.pool.QueryRow(r.Context(),
+			`INSERT INTO users (display_name) VALUES ($1) RETURNING id`,
+			body.DisplayName,
+		).Scan(&userID); err != nil {
+			httpError(w, http.StatusInternalServerError, "create user")
+			return
+		}
+		writeJSON(w, map[string]any{"user_id": userID, "display_name": body.DisplayName})
+	})
+}
+
+func (s *Server) shop(w http.ResponseWriter, r *http.Request, _ int64) {
+	type item struct {
+		SKU  string `json:"sku"`
+		Name string `json:"name"`
+		Cost int64  `json:"cost"`
+	}
+	out := []item{}
+	for sku, it := range Catalog {
+		out = append(out, item{SKU: sku, Name: it.Name, Cost: it.Cost})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Cost < out[j].Cost })
+	writeJSON(w, out)
+}
+
+type handler func(w http.ResponseWriter, r *http.Request, userID int64)
+
+func (s *Server) withAuth(h handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, err := s.auth(r)
+		if err != nil {
+			httpError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		h(w, r, userID)
+	}
+}
+
+// ===== Ví =====
+
+func (s *Server) getWallet(w http.ResponseWriter, r *http.Request, userID int64) {
+	ctx := r.Context()
+	available, err := s.ledger.Balance(ctx, ledger.UserAvailable(userID))
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "read balance")
+		return
+	}
+	locked, err := s.ledger.Balance(ctx, ledger.UserLocked(userID))
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "read balance")
+		return
+	}
+	writeJSON(w, map[string]int64{"available": available, "locked": locked})
+}
+
+func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, userID int64) {
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT t.id, t.type, t.created_at,
+		       COALESCE(SUM(e.amount) FILTER (WHERE a.type = 'user_available'), 0) AS delta_available,
+		       COALESCE(SUM(e.amount) FILTER (WHERE a.type = 'user_locked'), 0)    AS delta_locked
+		FROM ledger_transactions t
+		JOIN ledger_entries e ON e.txn_id = t.id
+		JOIN ledger_accounts a ON a.id = e.account_id
+		WHERE a.user_id = $1
+		GROUP BY t.id, t.type, t.created_at
+		ORDER BY t.id DESC LIMIT 50`,
+		userID,
+	)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "query")
+		return
+	}
+	defer rows.Close()
+	type txn struct {
+		ID             int64     `json:"id"`
+		Type           string    `json:"type"`
+		CreatedAt      time.Time `json:"created_at"`
+		DeltaAvailable int64     `json:"delta_available"`
+		DeltaLocked    int64     `json:"delta_locked"`
+	}
+	out := []txn{}
+	for rows.Next() {
+		var t txn
+		if err := rows.Scan(&t.ID, &t.Type, &t.CreatedAt, &t.DeltaAvailable, &t.DeltaLocked); err != nil {
+			httpError(w, http.StatusInternalServerError, "scan")
+			return
+		}
+		out = append(out, t)
+	}
+	writeJSON(w, out)
+}
+
+// ===== Kèo =====
+
+func (s *Server) listChallenges(w http.ResponseWriter, r *http.Request, userID int64) {
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT c.id, c.title, c.sport, c.goal_type, c.goal_value, c.source,
+		       c.stake_points, c.start_at, c.end_at, c.status,
+		       COUNT(e.id) AS participants,
+		       COUNT(e.id) FILTER (WHERE e.user_id = $1) > 0 AS joined
+		FROM challenges c
+		LEFT JOIN enrollments e ON e.challenge_id = c.id
+		WHERE c.status IN ('open', 'active')
+		GROUP BY c.id
+		ORDER BY c.created_at DESC LIMIT 50`,
+		userID,
+	)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "query")
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID           int64     `json:"id"`
+		Title        string    `json:"title"`
+		Sport        string    `json:"sport"`
+		GoalType     string    `json:"goal_type"`
+		GoalValue    float64   `json:"goal_value"`
+		Source       string    `json:"source"`
+		StakePoints  int64     `json:"stake_points"`
+		StartAt      time.Time `json:"start_at"`
+		EndAt        time.Time `json:"end_at"`
+		Status       string    `json:"status"`
+		Participants int64     `json:"participants"`
+		Joined       bool      `json:"joined"`
+	}
+	out := []item{}
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.ID, &it.Title, &it.Sport, &it.GoalType, &it.GoalValue,
+			&it.Source, &it.StakePoints, &it.StartAt, &it.EndAt, &it.Status,
+			&it.Participants, &it.Joined); err != nil {
+			httpError(w, http.StatusInternalServerError, "scan")
+			return
+		}
+		out = append(out, it)
+	}
+	writeJSON(w, out)
+}
+
+func (s *Server) createChallenge(w http.ResponseWriter, r *http.Request, userID int64) {
+	var body struct {
+		Title        string  `json:"title"`
+		Sport        string  `json:"sport"`
+		GoalType     string  `json:"goal_type"`
+		GoalValue    float64 `json:"goal_value"`
+		Source       string  `json:"source"`
+		StakePoints  int64   `json:"stake_points"`
+		DurationDays int     `json:"duration_days"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if body.DurationDays < 1 || body.DurationDays > 90 {
+		httpError(w, http.StatusBadRequest, "duration_days phải trong 1..90")
+		return
+	}
+	now := time.Now()
+	id, err := s.challenges.Create(r.Context(), challenge.Challenge{
+		CreatorID: userID, Title: body.Title, Sport: body.Sport,
+		GoalType: challenge.GoalType(body.GoalType), GoalValue: body.GoalValue,
+		Source: body.Source, StakePoints: body.StakePoints,
+		FeeBps: 1000, PassRatio: 0.8,
+		StartAt: now, EndAt: now.AddDate(0, 0, body.DurationDays), GraceHours: 48,
+	})
+	if err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Người tạo kèo cược luôn — "chủ kèo" không được đứng ngoài trò chơi
+	// của chính mình.
+	if _, err := s.challenges.Join(r.Context(), id, userID); err != nil {
+		writeJoinError(w, err)
+		return
+	}
+	writeJSON(w, map[string]int64{"challenge_id": id})
+}
+
+func (s *Server) joinChallenge(w http.ResponseWriter, r *http.Request, userID int64) {
+	challengeID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad challenge id")
+		return
+	}
+	enrollmentID, err := s.challenges.Join(r.Context(), challengeID, userID)
+	if err != nil {
+		writeJoinError(w, err)
+		return
+	}
+	writeJSON(w, map[string]int64{"enrollment_id": enrollmentID})
+}
+
+func writeJoinError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ledger.ErrInsufficientBalance):
+		httpError(w, http.StatusPaymentRequired, "không đủ điểm — mua thêm ở tab Ví")
+	case errors.Is(err, challenge.ErrNotJoinable):
+		httpError(w, http.StatusConflict, "kèo không còn nhận người")
+	case errors.Is(err, challenge.ErrNotFound):
+		httpError(w, http.StatusNotFound, "kèo không tồn tại")
+	default:
+		httpError(w, http.StatusInternalServerError, "join failed")
+	}
+}
+
+func (s *Server) myChallenges(w http.ResponseWriter, r *http.Request, userID int64) {
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT c.id, c.title, c.sport, c.source, c.goal_type, c.goal_value,
+		       c.stake_points, c.end_at, c.status AS challenge_status,
+		       e.status,
+		       COUNT(p.*)                          AS periods_total,
+		       COUNT(*) FILTER (WHERE p.passed)    AS periods_passed
+		FROM enrollments e
+		JOIN challenges c ON c.id = e.challenge_id
+		LEFT JOIN enrollment_periods p ON p.enrollment_id = e.id
+		WHERE e.user_id = $1
+		GROUP BY c.id, e.status
+		ORDER BY c.end_at DESC LIMIT 50`,
+		userID,
+	)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "query")
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ChallengeID     int64     `json:"challenge_id"`
+		Title           string    `json:"title"`
+		Sport           string    `json:"sport"`
+		Source          string    `json:"source"`
+		GoalType        string    `json:"goal_type"`
+		GoalValue       float64   `json:"goal_value"`
+		StakePoints     int64     `json:"stake_points"`
+		EndAt           time.Time `json:"end_at"`
+		ChallengeStatus string    `json:"challenge_status"`
+		Status          string    `json:"status"`
+		PeriodsTotal    int       `json:"periods_total"`
+		PeriodsPassed   int       `json:"periods_passed"`
+	}
+	out := []item{}
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.ChallengeID, &it.Title, &it.Sport, &it.Source,
+			&it.GoalType, &it.GoalValue, &it.StakePoints, &it.EndAt,
+			&it.ChallengeStatus, &it.Status, &it.PeriodsTotal, &it.PeriodsPassed); err != nil {
+			httpError(w, http.StatusInternalServerError, "scan")
+			return
+		}
+		out = append(out, it)
+	}
+	writeJSON(w, out)
+}
+
+// ===== Đổi thưởng =====
+
+func (s *Server) redeem(w http.ResponseWriter, r *http.Request, userID int64) {
+	var body struct {
+		SKU string `json:"sku"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpError(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	item, ok := Catalog[body.SKU]
+	if !ok {
+		httpError(w, http.StatusNotFound, "sku không tồn tại")
+		return
+	}
+
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "begin")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Lấy id trước để derive idempotency key, rồi insert với id tường minh —
+	// redemptions.ledger_txn_id NOT NULL nên ledger phải post trước.
+	var redemptionID int64
+	if err := tx.QueryRow(ctx,
+		`SELECT nextval(pg_get_serial_sequence('redemptions', 'id'))`,
+	).Scan(&redemptionID); err != nil {
+		httpError(w, http.StatusInternalServerError, "nextval")
+		return
+	}
+	res, err := s.ledger.PostTx(ctx, tx, ledger.RedeemRequest(userID, item.Cost, redemptionID))
+	if err != nil {
+		if errors.Is(err, ledger.ErrInsufficientBalance) {
+			httpError(w, http.StatusPaymentRequired, "không đủ điểm")
+			return
+		}
+		httpError(w, http.StatusInternalServerError, "ledger")
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO redemptions (id, user_id, item_sku, cost_points, ledger_txn_id)
+		OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3, $4, $5)`,
+		redemptionID, userID, body.SKU, item.Cost, res.TxnID,
+	); err != nil {
+		httpError(w, http.StatusInternalServerError, "insert redemption")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		httpError(w, http.StatusInternalServerError, "commit")
+		return
+	}
+	writeJSON(w, map[string]any{"redemption_id": redemptionID, "item": item.Name, "cost": item.Cost})
+}
+
+// ===== Helpers =====
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+func httpError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}

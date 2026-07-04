@@ -1,0 +1,11 @@
+# Go
+/keo-server
+*.test
+
+# Web
+web/node_modules/
+web/dist/
+
+# Local
+*.log
+.env
