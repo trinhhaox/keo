@@ -1,38 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import * as api from "./api.js";
+import { T, MONO, SPORTS, SOURCES, GOALS, fmtP, daysLeft } from "./theme.js";
+import LeaderboardSheet from "./leaderboard-sheet.jsx";
+import { StreakCard, ActivityFeed } from "./activity-feed.jsx";
 
-// ===== Design tokens (giữ nguyên từ prototype v3) =====
-const T = {
-  ink: "#15171B", paper: "#F1F3F1", card: "#FFFFFF",
-  brand: "#FFD338", brandDark: "#E8B800",
-  green: "#149A52", red: "#E5484D", strava: "#FC4C02",
-  gray: "#7A7F87", line: "#E4E6E4",
-};
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
-
-const SPORTS = {
-  walk: { label: "Đi bộ", icon: "🚶" }, run: { label: "Chạy bộ", icon: "🏃" },
-  swim: { label: "Bơi lội", icon: "🏊" }, bike: { label: "Đạp xe", icon: "🚴" },
-  gym: { label: "Gym", icon: "🏋️" },
-};
-const SOURCES = {
-  strava: { label: "Strava", icon: "🟠" },
-  google_fit: { label: "Google Fit", icon: "🟢" },
-  apple_health: { label: "Apple Health", icon: "🍎" },
-};
-const GOALS = {
-  daily_steps: { label: "bước/ngày", sports: ["walk"] },
-  weekly_distance_km: { label: "km/tuần", sports: ["run", "bike", "swim"] },
-  weekly_sessions: { label: "buổi/tuần", sports: ["gym", "swim"] },
-};
 const SKU_ICONS = { "voucher-sport-500k": "🎟️", "gear-trail-shoes": "👟", "ticket-hn-marathon": "🏅", "ticket-sg-night-run": "🌉" };
 const PACKS = [
   { pts: 100, price: "100.000đ", bonus: 0 }, { pts: 300, price: "300.000đ", bonus: 15 },
   { pts: 500, price: "500.000đ", bonus: 40 }, { pts: 1000, price: "1.000.000đ", bonus: 120 },
 ];
-
-const fmtP = (n) => Number(n).toLocaleString("vi-VN") + " điểm";
-const daysLeft = (endAt) => Math.max(0, Math.ceil((new Date(endAt) - Date.now()) / 86400000));
 
 function Notch({ side }) {
   return <div className="absolute w-4 h-4 rounded-full"
@@ -85,11 +61,12 @@ function Login({ onDone }) {
 }
 
 // ===== Thẻ kèo (phiếu cược) =====
-function ChallengeCard({ c, onJoin }) {
+function ChallengeCard({ c, onJoin, onBoard }) {
   const s = SPORTS[c.sport] || { icon: "🏆" };
   const pot = c.stake_points * c.participants;
   return (
-    <div className="relative rounded-2xl mb-4" style={{ background: T.card, boxShadow: "0 1px 4px rgba(21,23,27,.06)" }}>
+    <div className="relative rounded-2xl mb-4 cursor-pointer" onClick={() => onBoard(c.id)}
+      style={{ background: T.card, boxShadow: "0 1px 4px rgba(21,23,27,.06)" }}>
       <div className="p-4 pb-3 flex items-start gap-3">
         <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: T.paper }}>{s.icon}</div>
         <div className="min-w-0">
@@ -111,8 +88,9 @@ function ChallengeCard({ c, onJoin }) {
           <div className="text-[10px] uppercase tracking-widest mb-1" style={{ color: T.gray }}>Quỹ {fmtP(pot)}</div>
           {c.joined
             ? <span className="inline-block text-xs font-bold px-3 py-2 rounded-full" style={{ background: T.paper, color: T.gray }}>Đã tham gia</span>
-            : <button onClick={() => onJoin(c)} className="text-sm font-bold px-4 py-2 rounded-full active:scale-95 transition-transform"
+            : <button onClick={(e) => { e.stopPropagation(); onJoin(c); }} className="text-sm font-bold px-4 py-2 rounded-full active:scale-95 transition-transform"
                 style={{ background: T.brand, color: T.ink }}>Vào kèo</button>}
+          <div className="text-[10px] mt-1.5" style={{ color: T.gray }}>Bấm thẻ xem xếp hạng ›</div>
         </div>
       </div>
     </div>
@@ -120,13 +98,14 @@ function ChallengeCard({ c, onJoin }) {
 }
 
 // ===== Kèo của tôi =====
-function MyChallengeCard({ c, onSync, busy }) {
+function MyChallengeCard({ c, onSync, busy, onBoard }) {
   const s = SPORTS[c.sport] || { icon: "🏆" };
   const pct = c.periods_total ? Math.round((c.periods_passed / c.periods_total) * 100) : 0;
   const settled = c.status !== "active";
   const won = c.status === "completed";
   return (
-    <div className="rounded-2xl p-4 mb-4" style={{ background: T.card, boxShadow: "0 1px 4px rgba(21,23,27,.06)" }}>
+    <div className="rounded-2xl p-4 mb-4 cursor-pointer" onClick={() => onBoard(c.challenge_id)}
+      style={{ background: T.card, boxShadow: "0 1px 4px rgba(21,23,27,.06)" }}>
       <div className="flex items-center gap-3 mb-2">
         <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg" style={{ background: T.paper }}>{s.icon}</div>
         <div className="min-w-0 flex-1">
@@ -151,7 +130,7 @@ function MyChallengeCard({ c, onSync, busy }) {
           <div className="text-[12px] font-semibold" style={{ color: T.ink }}>
             Dữ liệu từ {SOURCES[c.source]?.label || c.source}
           </div>
-          <button onClick={() => onSync(c)} disabled={busy}
+          <button onClick={(e) => { e.stopPropagation(); onSync(c); }} disabled={busy}
             className="text-xs font-bold px-3 py-1.5 rounded-full active:scale-95 transition-transform"
             style={{ background: T.ink, color: T.brand, opacity: busy ? 0.6 : 1 }}>
             ⟳ Đồng bộ (demo)
@@ -309,6 +288,9 @@ export default function App() {
   const [mine, setMine] = useState([]);
   const [shop, setShop] = useState([]);
   const [txs, setTxs] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [acts, setActs] = useState(null);
+  const [board, setBoard] = useState(null); // challenge id đang mở bảng xếp hạng
   const [joining, setJoining] = useState(null);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -318,10 +300,11 @@ export default function App() {
 
   const load = useCallback(async () => {
     try {
-      const [w, cs, m, sh, tx] = await Promise.all([
+      const [w, cs, m, sh, tx, st, ac] = await Promise.all([
         api.getWallet(), api.listChallenges(), api.myChallenges(), api.getShop(), api.getTransactions(),
+        api.getMyStats(), api.getMyActivities(),
       ]);
-      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx);
+      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac);
     } catch (e) {
       if (e.status === 401) { api.logout(); setLoggedIn(false); }
       else showToast(`Lỗi tải dữ liệu: ${e.message}`);
@@ -371,18 +354,20 @@ export default function App() {
               </div>
               <div className="text-sm font-bold mb-3" style={{ color: T.ink }}>Kèo đang mở</div>
               {challenges.length === 0 && <Empty>Chưa có kèo nào trên sàn. Bấm “+ Tạo kèo” để mở kèo đầu tiên!</Empty>}
-              {challenges.map((c) => <ChallengeCard key={c.id} c={c} onJoin={setJoining} />)}
+              {challenges.map((c) => <ChallengeCard key={c.id} c={c} onJoin={setJoining} onBoard={setBoard} />)}
             </>)}
 
             {tab === "mine" && (<>
+              <StreakCard stats={stats} />
               <div className="text-sm font-bold mb-3" style={{ color: T.ink }}>Kèo của tôi ({mine.length})</div>
               {mine.length === 0 && <Empty>Bạn chưa vào kèo nào. Qua tab Khám phá để chọn thử thách.</Empty>}
               {mine.map((c) => (
-                <MyChallengeCard key={c.challenge_id} c={c} busy={busy}
+                <MyChallengeCard key={c.challenge_id} c={c} busy={busy} onBoard={setBoard}
                   onSync={(mc) => act(
                     () => api.syncHealthDemo(mc.source, mc.sport, mc.goal_type, mc.goal_value),
                     "Đã đồng bộ dữ liệu hôm nay qua /v1/health-sync ✓")} />
               ))}
+              <div className="mt-5"><ActivityFeed activities={acts} /></div>
             </>)}
 
             {tab === "shop" && (<>
@@ -477,6 +462,7 @@ export default function App() {
               style={{ background: T.ink, color: "#fff", boxShadow: "0 8px 20px rgba(21,23,27,.35)" }}>{toast}</div>
           )}
 
+          <LeaderboardSheet challengeID={board} onClose={() => setBoard(null)} />
           <JoinModal c={joining} wallet={wallet} busy={busy}
             onConfirm={(c) => act(async () => { await api.joinChallenge(c.id); setJoining(null); }, "Đã chốt kèo! Điểm cược được khóa 🔒")}
             onClose={() => setJoining(null)} />

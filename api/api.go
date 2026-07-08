@@ -47,7 +47,10 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/challenges", s.withAuth(s.listChallenges))
 	mux.HandleFunc("POST /v1/challenges", s.withAuth(s.createChallenge))
 	mux.HandleFunc("POST /v1/challenges/{id}/join", s.withAuth(s.joinChallenge))
+	mux.HandleFunc("GET /v1/challenges/{id}/leaderboard", s.withAuth(s.leaderboard))
 	mux.HandleFunc("GET /v1/me/challenges", s.withAuth(s.myChallenges))
+	mux.HandleFunc("GET /v1/me/activities", s.withAuth(s.myActivities))
+	mux.HandleFunc("GET /v1/me/stats", s.withAuth(s.myStats))
 	mux.HandleFunc("POST /v1/redemptions", s.withAuth(s.redeem))
 	mux.HandleFunc("GET /v1/shop", s.withAuth(s.shop))
 }

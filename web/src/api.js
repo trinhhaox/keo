@@ -68,6 +68,11 @@ export const listChallenges = () => req("GET", "/v1/challenges");
 export const myChallenges = () => req("GET", "/v1/me/challenges");
 export const joinChallenge = (id) => req("POST", `/v1/challenges/${id}/join`);
 export const createChallenge = (c) => req("POST", "/v1/challenges", c);
+export const getLeaderboard = (id) => req("GET", `/v1/challenges/${id}/leaderboard`);
+
+// ===== Thống kê cá nhân =====
+export const getMyActivities = () => req("GET", "/v1/me/activities");
+export const getMyStats = () => req("GET", "/v1/me/stats");
 
 // ===== Đổi thưởng =====
 export const getShop = () => req("GET", "/v1/shop");
