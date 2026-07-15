@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import * as api from "./api.js";
 
 // ===== Design tokens (giữ nguyên từ prototype v3) =====
@@ -340,8 +341,10 @@ export default function App() {
   const totalPot = challenges.reduce((s, c) => s + c.stake_points * c.participants, 0);
 
   return (
-    <div className="min-h-screen flex justify-center" style={{ background: "#DEE1DE", fontFamily: "'Be Vietnam Pro', sans-serif" }}>
-      <div className="relative w-full max-w-[400px] min-h-screen flex flex-col" style={{ background: T.paper }}>
+    <>
+      <SpeedInsights />
+      <div className="min-h-screen flex justify-center" style={{ background: "#DEE1DE", fontFamily: "'Be Vietnam Pro', sans-serif" }}>
+        <div className="relative w-full max-w-[400px] min-h-screen flex flex-col" style={{ background: T.paper }}>
         {!loggedIn ? <Login onDone={() => setLoggedIn(true)} /> : (<>
           {/* Header */}
           <div className="px-5 pt-6 pb-4 flex items-center justify-between" style={{ background: T.ink }}>
@@ -485,6 +488,7 @@ export default function App() {
         </>)}
       </div>
     </div>
+    </>
   );
 }
 
