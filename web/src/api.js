@@ -1,15 +1,23 @@
 // api.js — lớp client nói chuyện với backend Go.
-// Auth dev: user_id lưu localStorage, gửi qua header X-User-ID.
-// Khi backend chuyển sang JWT thật, chỉ file này phải đổi.
+// Sử dụng Supabase Auth để lấy Access Token.
 
-const KEY = "keo_user_id";
+import { createClient } from '@supabase/supabase-js'
 
-export function currentUserID() {
-  return localStorage.getItem(KEY);
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL'
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'
+
+export const supabase = createClient(supabaseUrl, supabaseKey)
+
+export async function currentToken() {
+  const localToken = localStorage.getItem("keo_jwt_token");
+  if (localToken) return localToken;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token || null;
 }
 
-export function logout() {
-  localStorage.removeItem(KEY);
+export async function logout() {
+  localStorage.removeItem("keo_jwt_token");
+  await supabase.auth.signOut();
 }
 
 export class APIError extends Error {
@@ -21,8 +29,8 @@ export class APIError extends Error {
 
 async function req(method, path, body) {
   const headers = { "Content-Type": "application/json" };
-  const uid = currentUserID();
-  if (uid) headers["X-User-ID"] = uid;
+  const token = await currentToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const resp = await fetch(path, {
     method,
     headers,
@@ -41,26 +49,13 @@ async function req(method, path, body) {
   return data;
 }
 
-// ===== Auth (dev) =====
-export async function devLogin(displayName) {
-  const out = await req("POST", "/v1/auth/dev-login", { display_name: displayName });
-  localStorage.setItem(KEY, String(out.user_id));
-  return out;
-}
-
 // ===== Ví =====
 export const getWallet = () => req("GET", "/v1/wallet");
 export const getTransactions = () => req("GET", "/v1/wallet/transactions");
 
 export async function buyPack(packPoints) {
   const order = await req("POST", "/v1/wallet/purchase", { pack_points: packPoints });
-  // DEV: mô phỏng ZaloPay bắn callback. Bản thật: mở order_url trong
-  // app ZaloPay, callback do ZaloPay bắn về server.
-  const cb = await req("POST", "/v1/dev/confirm-payment", {
-    app_trans_id: order.app_trans_id,
-  });
-  if (cb.return_code !== 1) throw new APIError(400, cb.return_message || "callback fail");
-  return order;
+  return order; // Trả về order (có order_url)
 }
 
 // ===== Kèo =====
@@ -74,9 +69,13 @@ export const getLeaderboard = (id) => req("GET", `/v1/challenges/${id}/leaderboa
 export const getMyActivities = () => req("GET", "/v1/me/activities");
 export const getMyStats = () => req("GET", "/v1/me/stats");
 
+// ===== Điểm thưởng (check-in + km Strava) =====
+export const getRewards = () => req("GET", "/v1/rewards");
+export const checkIn = () => req("POST", "/v1/checkins");
+
 // ===== Đổi thưởng =====
 export const getShop = () => req("GET", "/v1/shop");
-export const redeem = (sku) => req("POST", "/v1/redemptions", { sku });
+export const redeem = (sku, fulfillment) => req("POST", "/v1/redemptions", { sku, fulfillment });
 
 // ===== Health/Fit sync (demo: gửi bucket hôm nay đạt chỉ tiêu) =====
 export function syncHealthDemo(source, sport, goalType, goalValue) {

@@ -1,24 +1,27 @@
 // theme.js — design tokens + từ điển hiển thị dùng chung giữa các màn.
 
+import { Footprints, Zap, Waves, Bike, Dumbbell, Trophy, Activity, HeartPulse, Smartphone } from "lucide-react";
+
 export const T = {
-  ink: "#15171B", paper: "#F1F3F1", card: "#FFFFFF",
-  brand: "#FFD338", brandDark: "#E8B800",
-  green: "#149A52", red: "#E5484D", strava: "#FC4C02",
-  gray: "#7A7F87", line: "#E4E6E4",
+  bg: "#090B0E", paper: "#161920", card: "#1B1F27",
+  text: "#FFFFFF", textDim: "#8B949E",
+  brand: "#CCFF00", brandDark: "#99BF00",
+  green: "#00E676", red: "#FF3B30", strava: "#FC4C02",
+  gray: "#8B949E", line: "#2D333B",
 };
 
 export const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
 
 export const SPORTS = {
-  walk: { label: "Đi bộ", icon: "🚶" }, run: { label: "Chạy bộ", icon: "🏃" },
-  swim: { label: "Bơi lội", icon: "🏊" }, bike: { label: "Đạp xe", icon: "🚴" },
-  gym: { label: "Gym", icon: "🏋️" },
+  walk: { label: "Đi bộ", icon: Footprints }, run: { label: "Chạy bộ", icon: Zap },
+  swim: { label: "Bơi lội", icon: Waves }, bike: { label: "Đạp xe", icon: Bike },
+  gym: { label: "Gym", icon: Dumbbell },
 };
 
 export const SOURCES = {
-  strava: { label: "Strava", icon: "🟠" },
-  google_fit: { label: "Google Fit", icon: "🟢" },
-  apple_health: { label: "Apple Health", icon: "🍎" },
+  strava: { label: "Strava", icon: Activity },
+  google_fit: { label: "Google Fit", icon: HeartPulse },
+  apple_health: { label: "Apple Health", icon: Smartphone },
 };
 
 export const GOALS = {

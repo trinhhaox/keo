@@ -7,9 +7,10 @@ import { StreakCard, ActivityFeed } from "./activity-feed.jsx";
 import { NotificationToast, detectToastType } from "./notification.jsx";
 
 const SKU_ICONS = { "soap-sinh-duoc": Sparkles, "voucher-sport-500k": Ticket, "gear-trail-shoes": Footprints, "ticket-hn-marathon": Medal, "ticket-sg-night-run": Mountain };
+// Tỷ giá 1 điểm = 1 VNĐ.
 const PACKS = [
-  { pts: 100, price: "100.000đ", bonus: 0 }, { pts: 300, price: "300.000đ", bonus: 15 },
-  { pts: 500, price: "500.000đ", bonus: 40 }, { pts: 1000, price: "1.000.000đ", bonus: 120 },
+  { pts: 100000, price: "100.000đ", bonus: 0 }, { pts: 300000, price: "300.000đ", bonus: 15000 },
+  { pts: 500000, price: "500.000đ", bonus: 40000 }, { pts: 1000000, price: "1.000.000đ", bonus: 120000 },
 ];
 
 // ===== Animated Counter =====
@@ -593,6 +594,7 @@ function AppCore({ userProfile, onLogout }) {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null); // { msg, type }
   const [paymentQR, setPaymentQR] = useState(null);
+  const [rewards, setRewards] = useState(null); // { checked_in_today, total_points }
   const [redeemConfirm, setRedeemConfirm] = useState(null);
   const [deliveryForm, setDeliveryForm] = useState(null);
 
@@ -618,11 +620,11 @@ function AppCore({ userProfile, onLogout }) {
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const [w, cs, m, sh, tx, st, ac] = await Promise.all([
+      const [w, cs, m, sh, tx, st, ac, rw] = await Promise.all([
         api.getWallet(), api.listChallenges(), api.myChallenges(), api.getShop(), api.getTransactions(),
-        api.getMyStats(), api.getMyActivities(),
+        api.getMyStats(), api.getMyActivities(), api.getRewards(),
       ]);
-      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac);
+      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac); setRewards(rw);
     } catch (e) {
       if (e.status === 401) { onLogout(); }
       else showToast(`Lỗi tải dữ liệu: ${e.message}`, "error");
@@ -668,6 +670,15 @@ function AppCore({ userProfile, onLogout }) {
     catch (e) { showToast(e.status === 402 ? "Không đủ điểm — mua thêm ở tab Ví ⭐" : `Lỗi: ${e.message}`, "error"); }
     finally { setBusy(false); }
   };
+
+  const doCheckin = () => act(async () => {
+    const res = await api.checkIn();
+    if (res.capped && res.points_granted === 0) {
+      showToast("Đã check-in — hôm nay bạn chạm trần 100 điểm thưởng/ngày rồi 💪", "info");
+    } else {
+      showToast(`Check-in thành công! +${res.points_granted} điểm vào ví ✨`, "success");
+    }
+  }, null);
 
   // Filter + sort challenges
   const filteredChallenges = challenges
@@ -845,6 +856,30 @@ function AppCore({ userProfile, onLogout }) {
                     </div>
                   </div>
                   <div className="text-[11px] font-medium mt-4" style={{ color: T.textDim }}>Điểm dùng để cược và đổi thưởng, không rút thành tiền mặt.</div>
+                </div>
+
+                {/* Điểm thưởng: check-in hàng ngày + km đi bộ/chạy bộ từ Strava */}
+                <div className="rounded-3xl p-5 mb-6" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] uppercase tracking-widest font-bold mb-1" style={{ color: T.textDim }}>
+                        <Sparkles size={12} className="inline mr-1" style={{ color: T.brand }} />Tổng điểm thưởng đã nhận
+                      </div>
+                      <div className="text-2xl font-black" style={{ ...MONO, color: T.brand }}>
+                        {(rewards?.total_points ?? 0).toLocaleString("vi-VN")} điểm
+                      </div>
+                    </div>
+                    <button onClick={doCheckin} disabled={busy || !rewards || rewards.checked_in_today}
+                      className="rounded-2xl px-4 py-3 font-bold text-sm shrink-0 active:scale-95 transition-all disabled:active:scale-100"
+                      style={rewards?.checked_in_today
+                        ? { background: T.line, color: T.textDim }
+                        : { background: T.brand, color: "#000" }}>
+                      {rewards?.checked_in_today ? "Đã check-in hôm nay ✓" : "Check-in +1 ⭐"}
+                    </button>
+                  </div>
+                  <div className="text-[11px] font-medium mt-3" style={{ color: T.textDim }}>
+                    Check-in mỗi ngày +1 điểm · mỗi km đi bộ/chạy bộ (Strava) +1 điểm — cộng thẳng vào ví. Trần thưởng 100 điểm/ngày.
+                  </div>
                 </div>
 
                 <div className="text-sm font-bold mb-4 uppercase tracking-widest" style={{ color: T.textDim }}>Nạp Điểm (Chuyển khoản)</div>
