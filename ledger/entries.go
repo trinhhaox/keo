@@ -41,6 +41,22 @@ func StakeLockRequest(userID, challengeID, stake int64) Request {
 	}
 }
 
+// StakeReleaseRequest: hoàn trả cược khi hủy kèo.
+//
+//	user_locked     -stake
+//	user_available  +stake
+func StakeReleaseRequest(userID, challengeID, stake int64) Request {
+	return Request{
+		Type:           TxnStakeRelease,
+		IdempotencyKey: fmt.Sprintf("release:challenge=%d:user=%d", challengeID, userID),
+		Metadata:       map[string]any{"user_id": userID, "challenge_id": challengeID},
+		Entries: []Entry{
+			{Account: UserLocked(userID), Amount: -stake},
+			{Account: UserAvailable(userID), Amount: +stake},
+		},
+	}
+}
+
 // RedeemRequest: đổi thưởng, đốt điểm.
 //
 //	user_available  -cost
@@ -53,6 +69,24 @@ func RedeemRequest(userID, cost, redemptionID int64) Request {
 		Entries: []Entry{
 			{Account: UserAvailable(userID), Amount: -cost},
 			{Account: RewardExpense(), Amount: +cost},
+		},
+	}
+}
+
+// RewardPayoutRequest: phát điểm thưởng (check-in, quãng đường Strava) vào ví.
+// refKey phải duy nhất cho một lần quy đổi — hiện là id của reward_event
+// kích hoạt quy đổi, nên retry/replay vô hại.
+//
+//	reward_expense  -points   (account hệ thống, được phép âm)
+//	user_available  +points
+func RewardPayoutRequest(userID, points int64, refKey string) Request {
+	return Request{
+		Type:           TxnRewardPayout,
+		IdempotencyKey: fmt.Sprintf("reward:user=%d:%s", userID, refKey),
+		Metadata:       map[string]any{"user_id": userID, "ref": refKey},
+		Entries: []Entry{
+			{Account: RewardExpense(), Amount: -points},
+			{Account: UserAvailable(userID), Amount: +points},
 		},
 	}
 }

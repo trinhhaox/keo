@@ -1,4 +1,4 @@
-package api
+package restapi
 
 import (
 	"bytes"
@@ -50,7 +50,7 @@ func TestIntegrationLeaderboardAndStats(t *testing.T) {
 	auth := func(r *http.Request) (int64, error) {
 		return strconv.ParseInt(r.Header.Get("X-User-ID"), 10, 64)
 	}
-	apiSrv := NewServer(pool, ledgerStore, challengeStore, auth)
+	apiSrv := NewServer(pool, ledgerStore, challengeStore, auth, []byte("test-jwt"))
 	mux := http.NewServeMux()
 	apiSrv.Routes(mux)
 	ts := httptest.NewServer(mux)
@@ -111,7 +111,7 @@ func TestIntegrationLeaderboardAndStats(t *testing.T) {
 			INSERT INTO activities (user_id, source, external_activity_id, sport,
 			                        distance_m, duration_s, started_at, vn_date)
 			VALUES ($1, 'strava', $2, 'run', 5000, 1800, $3, $4::date)
-			ON CONFLICT (source, external_activity_id) DO NOTHING`,
+			ON CONFLICT (source, external_activity_id, started_at) DO NOTHING`,
 			bob, fmt.Sprintf("lb-act-%d-%d", bob, i), day, day.Format("2006-01-02"),
 		); err != nil {
 			t.Fatal(err)

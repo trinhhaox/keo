@@ -1,6 +1,6 @@
 // Bảng xếp hạng một kèo: mọi người chơi + tiến độ theo kỳ. Read-only từ
 // enrollments/enrollment_periods — không đụng ledger.
-package api
+package restapi
 
 import (
 	"net/http"
@@ -44,13 +44,14 @@ func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request, userID int6
 	rows, err := s.pool.Query(ctx, `
 		SELECT e.user_id, u.display_name, e.status,
 		       COUNT(p.*)                       AS periods_total,
-		       COUNT(*) FILTER (WHERE p.passed) AS periods_passed
+		       COUNT(*) FILTER (WHERE p.passed) AS periods_passed,
+		       COALESCE(SUM(p.achieved), 0)     AS total_achieved
 		FROM enrollments e
 		JOIN users u ON u.id = e.user_id
 		LEFT JOIN enrollment_periods p ON p.enrollment_id = e.id
 		WHERE e.challenge_id = $1
 		GROUP BY e.user_id, u.display_name, e.status
-		ORDER BY periods_passed DESC, u.display_name ASC`,
+		ORDER BY periods_passed DESC, total_achieved DESC, u.display_name ASC`,
 		challengeID,
 	)
 	if err != nil {
@@ -60,18 +61,19 @@ func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request, userID int6
 	defer rows.Close()
 
 	type entry struct {
-		UserID        int64  `json:"user_id"`
-		DisplayName   string `json:"display_name"`
-		Status        string `json:"status"`
-		PeriodsTotal  int    `json:"periods_total"`
-		PeriodsPassed int    `json:"periods_passed"`
-		IsMe          bool   `json:"is_me"`
+		UserID        int64   `json:"user_id"`
+		DisplayName   string  `json:"display_name"`
+		Status        string  `json:"status"`
+		PeriodsTotal  int     `json:"periods_total"`
+		PeriodsPassed int     `json:"periods_passed"`
+		TotalAchieved float64 `json:"total_achieved"`
+		IsMe          bool    `json:"is_me"`
 	}
 	entries := []entry{}
 	for rows.Next() {
 		var e entry
 		if err := rows.Scan(&e.UserID, &e.DisplayName, &e.Status,
-			&e.PeriodsTotal, &e.PeriodsPassed); err != nil {
+			&e.PeriodsTotal, &e.PeriodsPassed, &e.TotalAchieved); err != nil {
 			httpError(w, http.StatusInternalServerError, "scan")
 			return
 		}

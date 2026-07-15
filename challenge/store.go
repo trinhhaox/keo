@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,11 +29,11 @@ func (s *Store) Create(ctx context.Context, c Challenge) (int64, error) {
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO challenges
 			(creator_id, title, sport, goal_type, goal_value, source,
-			 stake_points, fee_bps, pass_ratio, start_at, end_at, grace_hours, status)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open')
+			 stake_points, fee_bps, pass_ratio, start_at, end_at, grace_hours, status, max_participants)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13)
 		RETURNING id`,
 		c.CreatorID, c.Title, c.Sport, c.GoalType, c.GoalValue, c.Source,
-		c.StakePoints, c.FeeBps, c.PassRatio, c.StartAt, c.EndAt, c.GraceHours,
+		c.StakePoints, c.FeeBps, c.PassRatio, c.StartAt, c.EndAt, c.GraceHours, c.MaxParticipants,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("create challenge: %w", err)
@@ -55,20 +56,53 @@ func (s *Store) Join(ctx context.Context, challengeID, userID int64) (int64, err
 	}
 	defer tx.Rollback(ctx)
 
-	// Đọc + validate challenge. FOR SHARE chặn settlement job đổi status
-	// trong lúc mình đang join (join vs settle trên cùng challenge).
+	// Đọc + validate challenge. FOR UPDATE (không phải FOR SHARE) có chủ đích:
+	// serialize các join song song trên cùng kèo để COUNT participants bên dưới
+	// không bị race vượt max_participants, đồng thời vẫn chặn settlement job
+	// đổi status trong lúc đang join.
 	var c Challenge
 	err = tx.QueryRow(ctx, `
-		SELECT id, goal_type, goal_value, stake_points, start_at, end_at, status
-		FROM challenges WHERE id = $1 FOR SHARE`,
+		SELECT id, goal_type, goal_value, stake_points, start_at, end_at, status, max_participants
+		FROM challenges WHERE id = $1 FOR UPDATE`,
 		challengeID,
-	).Scan(&c.ID, &c.GoalType, &c.GoalValue, &c.StakePoints, &c.StartAt, &c.EndAt, &c.Status)
+	).Scan(&c.ID, &c.GoalType, &c.GoalValue, &c.StakePoints, &c.StartAt, &c.EndAt, &c.Status, &c.MaxParticipants)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrNotFound
 	}
 	if err != nil {
 		return 0, fmt.Errorf("load challenge: %w", err)
 	}
+
+	// Đếm số người tham gia hiện tại
+	var currentParticipants int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM enrollments WHERE challenge_id = $1`,
+		challengeID,
+	).Scan(&currentParticipants); err != nil {
+		return 0, fmt.Errorf("count participants: %w", err)
+	}
+
+	// Kiểm tra xem user này đã tham gia chưa
+	var alreadyJoined bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM enrollments WHERE challenge_id = $1 AND user_id = $2)`,
+		challengeID, userID,
+	).Scan(&alreadyJoined)
+	if err != nil {
+		return 0, fmt.Errorf("check enrollment exists: %w", err)
+	}
+
+	if !alreadyJoined && c.MaxParticipants > 0 && currentParticipants >= c.MaxParticipants {
+		return 0, fmt.Errorf("%w: kèo đã đầy (%d/%d người)", ErrChallengeFull, currentParticipants, c.MaxParticipants)
+	}
+
+	// Chặn join nếu đã bước sang ngày thứ 2 của thử thách
+	todayStr := time.Now().In(VNLocation).Format("2006-01-02")
+	startStr := c.StartAt.In(VNLocation).Format("2006-01-02")
+	if todayStr > startStr {
+		return 0, fmt.Errorf("%w: kèo đã bắt đầu từ ngày %s, không thể tham gia thêm", ErrNotJoinable, startStr)
+	}
+
 	if c.Status != StatusOpen && c.Status != StatusActive {
 		return 0, fmt.Errorf("%w: status=%s", ErrNotJoinable, c.Status)
 	}

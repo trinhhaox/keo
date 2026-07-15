@@ -171,7 +171,7 @@ func (j *SettlementJob) settleOne(ctx context.Context, challengeID int64) error 
 		batch.Queue(`
 			UPDATE enrollments SET status = $1, result = $2, settled_at = now()
 			WHERE id = $3`,
-			st, result, o.enrollmentID)
+			st, string(result), o.enrollmentID)
 	}
 	for _, o := range completed {
 		mark(o, EnrollCompleted)

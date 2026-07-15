@@ -61,15 +61,29 @@ type StravaActivity struct {
 	StartDate    time.Time
 }
 
+// RewardAccruer cộng điểm thưởng quãng đường trong CÙNG tx với upsert activity.
+// Interface nhỏ để ingest không phụ thuộc cứng vào package reward; nil = tắt thưởng.
+type RewardAccruer interface {
+	AccrueActivity(ctx context.Context, tx pgx.Tx, userID int64,
+		sport, source, externalID string, distanceM float64, manual bool) error
+}
+
 // StravaWorker poll inbox và xử lý từng event.
 type StravaWorker struct {
-	pool   *pgxpool.Pool
-	client StravaClient
-	log    *slog.Logger
+	pool    *pgxpool.Pool
+	client  StravaClient
+	log     *slog.Logger
+	rewards RewardAccruer // optional — nil thì bỏ qua thưởng
 }
 
 func NewStravaWorker(pool *pgxpool.Pool, client StravaClient, log *slog.Logger) *StravaWorker {
 	return &StravaWorker{pool: pool, client: client, log: log}
+}
+
+// WithRewards bật cộng thưởng quãng đường cho hoạt động ingest được.
+func (w *StravaWorker) WithRewards(r RewardAccruer) *StravaWorker {
+	w.rewards = r
+	return w
 }
 
 // RunLoop chạy tới khi ctx hủy. An toàn chạy nhiều instance: SKIP LOCKED.
@@ -125,6 +139,11 @@ func (w *StravaWorker) ProcessOnce(ctx context.Context) (int, error) {
 		// Lỗi xử lý (API down, dữ liệu lạ): đánh dấu failed kèm lý do để
 		// điều tra, KHÔNG rollback về pending — tránh retry vô hạn chặn queue.
 		// Requeue thủ công/định kỳ sau khi hiểu nguyên nhân.
+		//
+		// BẮT BUỘC rollback tx trước khi mark failed: tx đang giữ FOR UPDATE
+		// trên chính row inbox này, mà UPDATE dưới đây đi bằng connection khác
+		// từ pool — không nhả lock trước là tự deadlock, worker treo vĩnh viễn.
+		tx.Rollback(ctx)
 		if _, mErr := w.pool.Exec(ctx, `
 			UPDATE webhook_inbox SET status = 'failed', error = $1, processed_at = now()
 			WHERE id = $2`, err.Error(), inboxID); mErr != nil {
@@ -210,8 +229,22 @@ func (w *StravaWorker) handle(ctx context.Context, tx pgx.Tx, payload []byte) er
 		IsManual:     sa.Manual,
 		StartedAt:    sa.StartDate,
 	}
-	if err := upsertActivity(ctx, tx, act); err != nil {
+	stale, err := upsertActivity(ctx, tx, act)
+	if err != nil {
 		return err
+	}
+	// Bản ghi cũ bị thay thế (update đổi giờ/ngày/bộ môn, hoặc thuộc user cũ
+	// khi tài khoản nguồn đổi chủ) → recompute cả kỳ cũ, theo đúng chủ cũ.
+	for _, p := range stale {
+		if err := recompute(ctx, tx, p.userID, p.sport, ProviderStrava, p.date); err != nil {
+			return err
+		}
+	}
+	if w.rewards != nil {
+		if err := w.rewards.AccrueActivity(ctx, tx, userID,
+			sport, ProviderStrava, externalID, sa.DistanceM, sa.Manual); err != nil {
+			return fmt.Errorf("accrue reward: %w", err)
+		}
 	}
 	return recompute(ctx, tx, userID, sport, ProviderStrava, vnDate(sa.StartDate))
 }

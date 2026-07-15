@@ -25,8 +25,8 @@ import (
 // Prod nên nâng lên envelope encryption với Cloud KMS; AES-GCM key tĩnh
 // (từ secret manager) là mức sàn chấp nhận được.
 type TokenCipher interface {
-	Encrypt(plaintext []byte) ([]byte, error)
-	Decrypt(ciphertext []byte) ([]byte, error)
+	Encrypt(ctx context.Context, plaintext []byte) ([]byte, error)
+	Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
 }
 
 type AESGCMCipher struct{ aead cipher.AEAD }
@@ -43,7 +43,7 @@ func NewAESGCMCipher(key32 []byte) (*AESGCMCipher, error) {
 	return &AESGCMCipher{aead: aead}, nil
 }
 
-func (c *AESGCMCipher) Encrypt(plaintext []byte) ([]byte, error) {
+func (c *AESGCMCipher) Encrypt(_ context.Context, plaintext []byte) ([]byte, error) {
 	nonce := make([]byte, c.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
@@ -51,7 +51,7 @@ func (c *AESGCMCipher) Encrypt(plaintext []byte) ([]byte, error) {
 	return c.aead.Seal(nonce, nonce, plaintext, nil), nil // nonce || ciphertext
 }
 
-func (c *AESGCMCipher) Decrypt(ct []byte) ([]byte, error) {
+func (c *AESGCMCipher) Decrypt(_ context.Context, ct []byte) ([]byte, error) {
 	ns := c.aead.NonceSize()
 	if len(ct) < ns {
 		return nil, fmt.Errorf("ciphertext too short")
@@ -108,11 +108,11 @@ func (c *HTTPStravaClient) ExchangeCode(ctx context.Context, userID int64, code 
 	if err != nil {
 		return fmt.Errorf("exchange code: %w", err)
 	}
-	accessEnc, err := c.Cipher.Encrypt([]byte(tok.AccessToken))
+	accessEnc, err := c.Cipher.Encrypt(ctx, []byte(tok.AccessToken))
 	if err != nil {
 		return err
 	}
-	refreshEnc, err := c.Cipher.Encrypt([]byte(tok.RefreshToken))
+	refreshEnc, err := c.Cipher.Encrypt(ctx, []byte(tok.RefreshToken))
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func (c *HTTPStravaClient) accessToken(ctx context.Context, athleteID int64) (st
 	}
 
 	if time.Until(expiresAt) > time.Minute {
-		access, err := c.Cipher.Decrypt(accessEnc)
+		access, err := c.Cipher.Decrypt(ctx, accessEnc)
 		if err != nil {
 			return "", fmt.Errorf("decrypt access: %w", err)
 		}
@@ -214,7 +214,7 @@ func (c *HTTPStravaClient) accessToken(ctx context.Context, athleteID int64) (st
 	}
 
 	// Token hết hạn / sắp hết → refresh.
-	refresh, err := c.Cipher.Decrypt(refreshEnc)
+	refresh, err := c.Cipher.Decrypt(ctx, refreshEnc)
 	if err != nil {
 		return "", fmt.Errorf("decrypt refresh: %w", err)
 	}
@@ -227,11 +227,11 @@ func (c *HTTPStravaClient) accessToken(ctx context.Context, athleteID int64) (st
 	if err != nil {
 		return "", fmt.Errorf("refresh token: %w", err)
 	}
-	newAccessEnc, err := c.Cipher.Encrypt([]byte(tok.AccessToken))
+	newAccessEnc, err := c.Cipher.Encrypt(ctx, []byte(tok.AccessToken))
 	if err != nil {
 		return "", err
 	}
-	newRefreshEnc, err := c.Cipher.Encrypt([]byte(tok.RefreshToken))
+	newRefreshEnc, err := c.Cipher.Encrypt(ctx, []byte(tok.RefreshToken))
 	if err != nil {
 		return "", err
 	}

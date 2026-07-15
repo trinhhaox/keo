@@ -31,6 +31,7 @@ const (
 	TxnStakeRelease TxnType = "stake_release"
 	TxnSettlement   TxnType = "settlement"
 	TxnRedeem       TxnType = "redeem"
+	TxnRewardPayout TxnType = "reward_payout"
 	TxnAdminAdjust  TxnType = "admin_adjust"
 )
 

@@ -77,8 +77,16 @@ func (s *HealthSyncService) Sync(ctx context.Context, userID int64, source, atte
 			Sessions:   max(b.Sessions, 1),
 			StartedAt:  date,
 		}
-		if err := upsertActivity(ctx, tx, act); err != nil {
+		// started_at của bucket cố định theo ngày nên stale luôn rỗng ở đây;
+		// vẫn recompute cho chắc nếu định nghĩa external ID đổi về sau.
+		stale, err := upsertActivity(ctx, tx, act)
+		if err != nil {
 			return err
+		}
+		for _, p := range stale {
+			if err := recompute(ctx, tx, p.userID, p.sport, source, p.date); err != nil {
+				return err
+			}
 		}
 		if err := recompute(ctx, tx, userID, b.Sport, source, date); err != nil {
 			return err

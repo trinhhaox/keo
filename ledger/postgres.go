@@ -66,7 +66,7 @@ func (s *PGStore) PostTx(ctx context.Context, tx pgx.Tx, req Request) (Result, e
 		VALUES ($1, $2, $3)
 		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING id`,
-		req.Type, req.IdempotencyKey, meta,
+		req.Type, req.IdempotencyKey, string(meta),
 	).Scan(&txnID)
 
 	if errors.Is(err, pgx.ErrNoRows) {

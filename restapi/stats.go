@@ -1,7 +1,7 @@
 // Thống kê cá nhân: hoạt động gần đây + chuỗi ngày tập (streak) + tổng tuần.
 // Tất cả đọc từ bảng activities — nguồn sự thật duy nhất về vận động, nên số
 // liệu ở đây tự khớp với tiến độ kèo (cùng nguồn recompute).
-package api
+package restapi
 
 import (
 	"net/http"

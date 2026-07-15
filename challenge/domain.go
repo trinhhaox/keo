@@ -34,20 +34,21 @@ const (
 )
 
 type Challenge struct {
-	ID          int64
-	CreatorID   int64
-	Title       string
-	Sport       string
-	GoalType    GoalType
-	GoalValue   float64
-	Source      string
-	StakePoints int64
-	FeeBps      int64
-	PassRatio   float64
-	StartAt     time.Time
-	EndAt       time.Time
-	GraceHours  int
-	Status      Status
+	ID              int64
+	CreatorID       int64
+	Title           string
+	Sport           string
+	GoalType        GoalType
+	GoalValue       float64
+	Source          string
+	StakePoints     int64
+	FeeBps          int64
+	PassRatio       float64
+	StartAt         time.Time
+	EndAt           time.Time
+	GraceHours      int
+	Status          Status
+	MaxParticipants int
 }
 
 type Enrollment struct {
@@ -65,8 +66,9 @@ type Period struct {
 }
 
 var (
-	ErrNotJoinable = errors.New("challenge: not joinable")
-	ErrNotFound    = errors.New("challenge: not found")
+	ErrNotJoinable   = errors.New("challenge: not joinable")
+	ErrNotFound      = errors.New("challenge: not found")
+	ErrChallengeFull = errors.New("challenge: full")
 )
 
 // VNLocation là timezone chốt kỳ. Ranh giới ngày/tuần tính theo giờ VN —

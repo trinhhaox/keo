@@ -114,13 +114,17 @@ func TestIntegrationFullLifecycle(t *testing.T) {
 		}
 	}
 
-	// Kèo daily 5 ngày, đã hết hạn + qua grace → settle được ngay.
+	// Kèo daily 5 ngày. Join chỉ được phép trong ngày bắt đầu nên tạo kèo
+	// từ hôm nay, join xong rồi mới "du hành thời gian" (dời start/end về
+	// quá khứ) để kèo hết hạn + qua grace → settle được ngay.
 	now := time.Now()
+	y, m, d := now.In(VNLocation).Date()
+	today := time.Date(y, m, d, 0, 0, 0, 0, VNLocation)
 	challengeID, err := store.Create(ctx, Challenge{
 		CreatorID: userA, Title: "Đi bộ 10k bước (lifecycle test)", Sport: "walk",
 		GoalType: GoalDailySteps, GoalValue: 10000, Source: "google_fit",
 		StakePoints: 100, FeeBps: 1000, PassRatio: 0.8,
-		StartAt: now.AddDate(0, 0, -8), EndAt: now.AddDate(0, 0, -3), GraceHours: 1,
+		StartAt: today, EndAt: today.AddDate(0, 0, 5), GraceHours: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +153,14 @@ func TestIntegrationFullLifecycle(t *testing.T) {
 	// Sau join: available = 900, locked = 100, và chỉ khóa MỘT lần dù join 2 lần.
 	if bal, _ := ledgerSvc.Balance(ctx, ledger.UserLocked(userA)); bal != 100 {
 		t.Fatalf("userA locked = %d, want 100", bal)
+	}
+
+	// Du hành thời gian: kèo đã kết thúc 3 ngày trước, qua grace 1h.
+	// (Settlement chỉ nhìn end_at + grace và cờ passed, không nhìn ngày kỳ.)
+	if _, err := pool.Exec(ctx, `
+		UPDATE challenges SET start_at = $2, end_at = $3 WHERE id = $1`,
+		challengeID, now.AddDate(0, 0, -8), now.AddDate(0, 0, -3)); err != nil {
+		t.Fatal(err)
 	}
 
 	// Mô phỏng ingestion: A đậu mọi kỳ, B đậu đúng ceil(80%), C không kỳ nào.

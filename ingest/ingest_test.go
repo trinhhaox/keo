@@ -12,6 +12,7 @@ import (
 
 	"github.com/hao/keo/challenge"
 	"github.com/hao/keo/ledger"
+	"github.com/hao/keo/reward"
 )
 
 // ===== Fakes =====
@@ -46,6 +47,13 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
+}
+
+// startOfTodayVN: kèo chỉ cho join trong ngày bắt đầu (giờ VN), nên test phải
+// mở kèo từ 0h hôm nay thay vì lùi StartAt về quá khứ.
+func startOfTodayVN(now time.Time) time.Time {
+	y, m, d := now.In(challenge.VNLocation).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, challenge.VNLocation)
 }
 
 // setupUserWithChallenge: user + điểm + kèo đang mở + đã join.
@@ -106,7 +114,7 @@ func TestIntegrationStravaFlow(t *testing.T) {
 		Title: "Chạy 20km/tuần (ingest test)", Sport: "run",
 		GoalType: challenge.GoalWeeklyDistanceKm, GoalValue: 20, Source: "strava",
 		StakePoints: 100, FeeBps: 1000, PassRatio: 0.8,
-		StartAt: now.AddDate(0, 0, -2), EndAt: now.AddDate(0, 0, 12), GraceHours: 48,
+		StartAt: startOfTodayVN(now), EndAt: now.AddDate(0, 0, 12), GraceHours: 48,
 	})
 
 	// Gắn tài khoản Strava.
@@ -124,7 +132,18 @@ func TestIntegrationStravaFlow(t *testing.T) {
 	strava := &fakeStrava{activities: map[int64]StravaActivity{
 		actID: {ID: actID, Type: "Run", DistanceM: 5000, MovingTimeS: 1800, StartDate: now},
 	}}
-	worker := NewStravaWorker(pool, strava, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	// Bật reward để verify wiring worker → thưởng km chạy trong cùng tx.
+	rewardSvc := reward.NewService(pool, ledger.NewPGStore(pool))
+	worker := NewStravaWorker(pool, strava, slog.New(slog.NewTextHandler(os.Stderr, nil))).
+		WithRewards(rewardSvc)
+	rewardPoints := func() int64 {
+		t.Helper()
+		sum, err := rewardSvc.GetSummary(ctx, userID, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sum.TotalPoints
+	}
 
 	push := func(aspect string, eventTime int64) {
 		t.Helper()
@@ -147,10 +166,13 @@ func TestIntegrationStravaFlow(t *testing.T) {
 		}
 	}
 
-	// 1. create: chạy 5km → achieved 5.
+	// 1. create: chạy 5km → achieved 5, thưởng 5 điểm.
 	push("create", 1)
 	if achieved, _ := periodOf(t, pool, enrollmentID, now); achieved != 5 {
 		t.Fatalf("sau create: achieved = %v, want 5", achieved)
+	}
+	if got := rewardPoints(); got != 5 {
+		t.Fatalf("thưởng sau create 5km: %d điểm, want 5", got)
 	}
 
 	// 2. update: Strava sửa thành 21km → achieved phải là 21 (ĐÈ, không phải 26).
@@ -177,6 +199,12 @@ func TestIntegrationStravaFlow(t *testing.T) {
 	if achieved, _ := periodOf(t, pool, enrollmentID, now); achieved != 0 {
 		t.Fatalf("manual entry bị tính vào kèo: achieved = %v", achieved)
 	}
+
+	// Thưởng km cấp MỘT lần theo hoạt động: update tăng km không top-up,
+	// delete không thu hồi, re-create manual không cấp lại → vẫn 5 điểm.
+	if got := rewardPoints(); got != 5 {
+		t.Fatalf("thưởng cuối chuỗi update/delete/manual: %d điểm, want 5", got)
+	}
 }
 
 // TestIntegrationHealthSyncOverwrite: sync bucket là ĐÈ theo (user,sport,ngày) —
@@ -190,7 +218,7 @@ func TestIntegrationHealthSyncOverwrite(t *testing.T) {
 		Title: "10k bước/ngày (ingest test)", Sport: "walk",
 		GoalType: challenge.GoalDailySteps, GoalValue: 10000, Source: "google_fit",
 		StakePoints: 100, FeeBps: 1000, PassRatio: 0.8,
-		StartAt: now.AddDate(0, 0, -2), EndAt: now.AddDate(0, 0, 5), GraceHours: 48,
+		StartAt: startOfTodayVN(now), EndAt: now.AddDate(0, 0, 5), GraceHours: 48,
 	})
 
 	svc := NewHealthSyncService(pool, okVerifier{})

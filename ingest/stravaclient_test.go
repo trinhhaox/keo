@@ -75,8 +75,8 @@ func TestIntegrationStravaClientRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	athleteID := time.Now().UnixNano()
-	oldAccess, _ := cph.Encrypt([]byte("old-access"))
-	oldRefresh, _ := cph.Encrypt([]byte("old-refresh"))
+	oldAccess, _ := cph.Encrypt(ctx, []byte("old-access"))
+	oldRefresh, _ := cph.Encrypt(ctx, []byte("old-refresh"))
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO user_integrations
 			(user_id, provider, external_user_id, access_token_enc, refresh_token_enc, token_expires_at)
@@ -117,7 +117,7 @@ func TestIntegrationStravaClientRefresh(t *testing.T) {
 		fmt.Sprint(athleteID)).Scan(&refreshEnc); err != nil {
 		t.Fatal(err)
 	}
-	dec, err := cph.Decrypt(refreshEnc)
+	dec, err := cph.Decrypt(ctx, refreshEnc)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,13 +1,12 @@
-package api
+package restapi
 
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,8 +21,9 @@ import (
 )
 
 // TestIntegrationUserJourney chạy trọn hành trình một user qua HTTP thật
-// (httptest): mua điểm (callback ZaloPay giả với MAC đúng) → tạo kèo (tự
-// động vào kèo) → xem ví/tiến độ → đổi thưởng → verify từng số dư.
+// (httptest): mua điểm (webhook SePay giả với API key đúng) → tạo kèo (tự
+// động vào kèo) → xem ví/tiến độ → đổi thưởng → check-in nhận thưởng →
+// verify từng số dư.
 func TestIntegrationUserJourney(t *testing.T) {
 	dsn := os.Getenv("LEDGER_TEST_DSN")
 	if dsn == "" {
@@ -41,11 +41,12 @@ func TestIntegrationUserJourney(t *testing.T) {
 		return strconv.ParseInt(r.Header.Get("X-User-ID"), 10, 64)
 	}
 
-	const key2 = "test-key2"
+	const sepayKey = "test-sepay-key"
 	ledgerStore := ledger.NewPGStore(pool)
 	challengeStore := challenge.NewStore(pool, ledgerStore)
-	paySvc := payment.NewService(pool, ledgerStore, fakeGateway{}, key2)
-	apiSrv := NewServer(pool, ledgerStore, challengeStore, auth)
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	paySvc := payment.NewService(pool, ledgerStore, sepayKey, "0000", "MB", quiet)
+	apiSrv := NewServer(pool, ledgerStore, challengeStore, auth, []byte("test-jwt"))
 
 	mux := http.NewServeMux()
 	apiSrv.Routes(mux)
@@ -81,12 +82,12 @@ func TestIntegrationUserJourney(t *testing.T) {
 		return resp
 	}
 
-	// ===== 1. Mua gói 1000 điểm =====
+	// ===== 1. Mua gói 1.000.000 điểm (1 điểm = 1 VNĐ) =====
 	var order struct {
 		OrderURL   string `json:"order_url"`
 		AppTransID string `json:"app_trans_id"`
 	}
-	call("POST", "/v1/wallet/purchase", map[string]int64{"pack_points": 1000}, &order)
+	call("POST", "/v1/wallet/purchase", map[string]int64{"pack_points": 1_000_000}, &order)
 	if order.AppTransID == "" {
 		t.Fatal("không nhận được app_trans_id")
 	}
@@ -98,35 +99,46 @@ func TestIntegrationUserJourney(t *testing.T) {
 		t.Fatalf("chưa callback mà đã có %d điểm", wallet.Available)
 	}
 
-	// ZaloPay bắn callback (MAC đúng với key2). Bắn HAI lần — lần hai phải
-	// idempotent, vẫn return_code 1 và không cộng điểm lần nữa.
-	data, _ := json.Marshal(map[string]any{
-		"app_trans_id": order.AppTransID, "amount": 1_000_000, "zp_trans_id": 987,
-	})
-	mac := hmac.New(sha256.New, []byte(key2))
-	mac.Write(data)
-	cb := map[string]any{"data": string(data), "mac": hex.EncodeToString(mac.Sum(nil)), "type": 1}
+	// SePay bắn webhook (API key đúng). Bắn HAI lần — lần hai phải idempotent,
+	// vẫn success và không cộng điểm lần nữa.
+	webhook := func(apiKey string) *http.Response {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{
+			"gateway": "TestBank", "content": order.AppTransID,
+			"transferType": "in", "transferAmount": 1_000_000, "referenceCode": "987",
+		})
+		req, _ := http.NewRequest("POST", ts.URL+"/webhooks/sepay", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Apikey "+apiKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
 	for i := 0; i < 2; i++ {
+		resp := webhook(sepayKey)
 		var cbResp struct {
-			ReturnCode int `json:"return_code"`
+			Success bool `json:"success"`
 		}
-		call("POST", "/callbacks/zalopay", cb, &cbResp)
-		if cbResp.ReturnCode != 1 {
-			t.Fatalf("callback lần %d: return_code = %d, want 1", i+1, cbResp.ReturnCode)
+		if err := json.NewDecoder(resp.Body).Decode(&cbResp); err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if !cbResp.Success {
+			t.Fatalf("webhook lần %d: success = false, want true", i+1)
 		}
 	}
-	// MAC sai phải bị từ chối.
-	var badResp struct {
-		ReturnCode int `json:"return_code"`
-	}
-	call("POST", "/callbacks/zalopay", map[string]any{"data": string(data), "mac": "deadbeef"}, &badResp)
-	if badResp.ReturnCode == 1 {
-		t.Fatal("callback MAC sai mà vẫn được chấp nhận")
+	// API key sai phải bị từ chối.
+	resp := webhook("wrong-key")
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("webhook API key sai mà vẫn được chấp nhận")
 	}
 
 	call("GET", "/v1/wallet", nil, &wallet)
-	if wallet.Available != 1120 { // 1000 + 120 bonus, cộng đúng MỘT lần
-		t.Fatalf("available = %d, want 1120", wallet.Available)
+	if wallet.Available != 1_120_000 { // 1.000.000 + 120.000 bonus, cộng đúng MỘT lần
+		t.Fatalf("available = %d, want 1120000", wallet.Available)
 	}
 
 	// ===== 2. Tạo kèo (tự động vào kèo, khóa cược) =====
@@ -143,12 +155,12 @@ func TestIntegrationUserJourney(t *testing.T) {
 	}
 
 	call("GET", "/v1/wallet", nil, &wallet)
-	if wallet.Available != 920 || wallet.Locked != 200 {
-		t.Fatalf("sau tạo kèo: available=%d locked=%d, want 920/200", wallet.Available, wallet.Locked)
+	if wallet.Available != 1_119_800 || wallet.Locked != 200 {
+		t.Fatalf("sau tạo kèo: available=%d locked=%d, want 1119800/200", wallet.Available, wallet.Locked)
 	}
 
 	// Join lại kèo của chính mình → idempotent, không khóa thêm.
-	resp := call("POST", fmt.Sprintf("/v1/challenges/%d/join", created.ChallengeID), nil, nil)
+	resp = call("POST", fmt.Sprintf("/v1/challenges/%d/join", created.ChallengeID), nil, nil)
 	resp.Body.Close()
 	call("GET", "/v1/wallet", nil, &wallet)
 	if wallet.Locked != 200 {
@@ -178,8 +190,8 @@ func TestIntegrationUserJourney(t *testing.T) {
 	// ===== 4. Đổi thưởng =====
 	call("POST", "/v1/redemptions", map[string]string{"sku": "ticket-sg-night-run"}, nil)
 	call("GET", "/v1/wallet", nil, &wallet)
-	if wallet.Available != 320 { // 920 − 600
-		t.Fatalf("sau đổi vé: available = %d, want 320", wallet.Available)
+	if wallet.Available != 519_800 { // 1.119.800 − 600.000
+		t.Fatalf("sau đổi vé: available = %d, want 519800", wallet.Available)
 	}
 
 	// Đổi món vượt số dư → 402, ví không đổi.
@@ -189,13 +201,35 @@ func TestIntegrationUserJourney(t *testing.T) {
 		t.Fatalf("đổi thưởng vượt số dư: status = %d, want 402", resp.StatusCode)
 	}
 	call("GET", "/v1/wallet", nil, &wallet)
-	if wallet.Available != 320 {
+	if wallet.Available != 519_800 {
 		t.Fatalf("ví bị đổi sau request thất bại: %d", wallet.Available)
 	}
-}
 
-type fakeGateway struct{}
-
-func (fakeGateway) CreateOrder(_ context.Context, appTransID string, _ int64, _ string) (string, error) {
-	return "https://pay.zalopay.test/" + appTransID, nil
+	// ===== 5. Check-in nhận thưởng =====
+	var checkin struct {
+		PointsGranted int64 `json:"points_granted"`
+	}
+	call("POST", "/v1/checkins", nil, &checkin)
+	if checkin.PointsGranted != 1 {
+		t.Fatalf("check-in: %+v, want points_granted=1", checkin)
+	}
+	// Check-in lần 2 trong ngày → 409, không cộng thêm.
+	resp = call("POST", "/v1/checkins", nil, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("check-in lần 2: status = %d, want 409", resp.StatusCode)
+	}
+	var rewards struct {
+		CheckedInToday bool  `json:"checked_in_today"`
+		TotalPoints    int64 `json:"total_points"`
+	}
+	call("GET", "/v1/rewards", nil, &rewards)
+	if !rewards.CheckedInToday || rewards.TotalPoints != 1 {
+		t.Fatalf("rewards: %+v, want checked_in_today=true total=1", rewards)
+	}
+	// Ví +1 điểm — thưởng cộng thẳng.
+	call("GET", "/v1/wallet", nil, &wallet)
+	if wallet.Available != 519_801 {
+		t.Fatalf("ví sau check-in: %d, want 519801", wallet.Available)
+	}
 }

@@ -225,3 +225,32 @@ func TestIntegrationZeroSum(t *testing.T) {
 		t.Fatalf("tổng ledger = %d, bất biến double-entry đã vỡ", sum)
 	}
 }
+
+func TestRewardPayoutRequest(t *testing.T) {
+	req := RewardPayoutRequest(7, 2, "event=99")
+	if err := req.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if req.Type != TxnRewardPayout {
+		t.Fatalf("type = %s", req.Type)
+	}
+	// Cùng event → cùng idempotency key (replay vô hại); khác event → khác key.
+	if req.IdempotencyKey != RewardPayoutRequest(7, 2, "event=99").IdempotencyKey {
+		t.Fatal("idempotency key không ổn định")
+	}
+	if req.IdempotencyKey == RewardPayoutRequest(7, 2, "event=100").IdempotencyKey {
+		t.Fatal("hai event khác nhau trùng idempotency key")
+	}
+	var user, expense int64
+	for _, e := range req.Entries {
+		switch e.Account.Type {
+		case AccountUserAvailable:
+			user = e.Amount
+		case AccountRewardExpense:
+			expense = e.Amount
+		}
+	}
+	if user != 2 || expense != -2 {
+		t.Fatalf("entries: user=%d expense=%d, want +2/-2", user, expense)
+	}
+}

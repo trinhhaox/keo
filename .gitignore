@@ -9,3 +9,8 @@ web/dist/
 # Local
 *.log
 .env
+.vercel
+.env*
+
+# Agent local config
+.claude/

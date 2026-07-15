@@ -6,10 +6,7 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,17 +15,17 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/hao/keo/api"
 	"github.com/hao/keo/challenge"
 	"github.com/hao/keo/ingest"
 	"github.com/hao/keo/ledger"
 	"github.com/hao/keo/payment"
+	"github.com/hao/keo/restapi"
+	"github.com/hao/keo/reward"
 )
 
 func main() {
@@ -58,10 +55,11 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("decode TOKEN_CIPHER_KEY: %w", err)
 	}
-	cph, err := ingest.NewAESGCMCipher(tokenKey)
+	localKMS, err := ingest.NewLocalKMS(tokenKey)
 	if err != nil {
-		return fmt.Errorf("cipher: %w", err)
+		return fmt.Errorf("local KMS: %w", err)
 	}
+	cph := ingest.NewEnvelopeCipher(localKMS)
 	stravaClient := &ingest.HTTPStravaClient{
 		Pool:         pool,
 		Cipher:       cph,
@@ -69,42 +67,103 @@ func run(log *slog.Logger) error {
 		ClientSecret: envOr("STRAVA_CLIENT_SECRET", "dev"),
 	}
 
-	// TODO: thay bằng session/JWT thật. Skeleton đọc X-User-ID cho dev.
-	authUserID := func(r *http.Request) (int64, error) {
-		return strconv.ParseInt(r.Header.Get("X-User-ID"), 10, 64)
-	}
-	// TODO: verify App Attest / Play Integrity thật.
-	verifier := allowAllVerifier{}
+	devMode := os.Getenv("DEV_MODE") == "1"
 
-	paySvc := payment.NewService(pool, ledgerStore, zaloPayStub{log: log}, envOr("ZALOPAY_KEY2", "dev-key2"))
+	// ===== Middlewares =====
+	// Ngoài DEV_MODE, secret bắt buộc từ env: JWT_SECRET default nằm công khai
+	// trong repo (forge token = chiếm mọi ví), SEPAY_API_KEY rỗng làm webhook
+	// bỏ verify (POST giả chuyển khoản = mint điểm tự do).
+	if !devMode {
+		mustEnv("JWT_SECRET")
+		mustEnv("SEPAY_API_KEY")
+	}
+	jwtSecret := []byte(envOr("JWT_SECRET", "dev-jwt-secret-do-not-use-in-prod"))
+	authUserID := restapi.AuthMiddleware(jwtSecret, pool)
+	
+	var verifier ingest.AttestationVerifier
+	if os.Getenv("DEV_MODE") == "1" {
+		verifier = allowAllVerifier{}
+		log.Warn("DEV_MODE bật: AttestationVerifier bị vô hiệu hóa (Cho phép mọi thiết bị)")
+	} else {
+		fbAppID := envOr("FIREBASE_APP_ID", "1:1234567890:android:abcdef123456")
+		v, err := ingest.NewFirebaseAppCheckVerifier(fbAppID, log)
+		if err != nil {
+			return fmt.Errorf("khởi tạo Firebase App Check: %w", err)
+		}
+		verifier = v
+	}
+
+	// ===== Payment Gateway (SePay) =====
+	sepayAPIKey := envOr("SEPAY_API_KEY", "")
+	sepayAccountNo := envOr("SEPAY_ACCOUNT_NO", "000000000")
+	sepayBankCode := envOr("SEPAY_BANK_CODE", "MB")
+	
+	paySvc := payment.NewService(pool, ledgerStore, sepayAPIKey, sepayAccountNo, sepayBankCode, log)
 	healthSvc := ingest.NewHealthSyncService(pool, verifier)
-	apiSrv := api.NewServer(pool, ledgerStore, challengeStore, authUserID)
+	apiSrv := restapi.NewServer(pool, ledgerStore, challengeStore, authUserID, jwtSecret)
 
 	// ===== HTTP =====
 	mux := http.NewServeMux()
 	apiSrv.Routes(mux)
+	
 	paySvc.Routes(mux, authUserID)
 	ingestMux := ingest.NewMux(pool, healthSvc, envOr("STRAVA_VERIFY_TOKEN", "dev-verify"), authUserID)
 	mux.Handle("/webhooks/", ingestMux)
 	mux.Handle("/v1/health-sync", ingestMux)
 
 	// OAuth redirect từ Strava sau khi user ủy quyền.
-	mux.HandleFunc("GET /oauth/strava/callback", func(w http.ResponseWriter, r *http.Request) {
-		userID, err := authUserID(r)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+	mux.HandleFunc("GET /v1/oauth/strava/callback", func(w http.ResponseWriter, r *http.Request) {
+		var tokenStr string
+		state := r.URL.Query().Get("state")
+		if state != "" {
+			tokenStr = state
+		} else {
+			// Fallback nếu có header
+			authHeader := r.Header.Get("Authorization")
+			if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+				tokenStr = authHeader[7:]
+			}
+		}
+
+		if tokenStr == "" {
+			http.Error(w, "unauthorized: missing state token", http.StatusUnauthorized)
 			return
 		}
+
+		userID, err := restapi.ValidateSupabaseJWT(r.Context(), tokenStr, jwtSecret, pool)
+		if err != nil {
+			log.Error("verify jwt error", "err", err)
+			http.Error(w, "unauthorized: invalid token", http.StatusUnauthorized)
+			return
+		}
+
 		if err := stravaClient.ExchangeCode(r.Context(), userID, r.URL.Query().Get("code")); err != nil {
 			log.Error("strava exchange", "err", err)
 			http.Error(w, "exchange failed", http.StatusBadGateway)
 			return
 		}
-		w.Write([]byte("Đã kết nối Strava. Quay lại app để tiếp tục."))
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(`
+			<html>
+			<body style="background:#15171B;color:#FFF;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+				<div style="text-align:center;">
+					<h2 style="color:#CCFF00;">Kết nối Strava thành công!</h2>
+					<p>Trình duyệt sẽ tự động quay lại ứng dụng sau 3 giây...</p>
+					<script>
+						setTimeout(function() {
+							window.location.href = "/";
+						}, 3000);
+					</script>
+				</div>
+			</body>
+			</html>
+		`))
 	})
 
 	// ===== Background workers =====
-	go ingest.NewStravaWorker(pool, stravaClient, log).RunLoop(ctx, 5*time.Second)
+	rewardSvc := reward.NewService(pool, ledgerStore)
+	go ingest.NewStravaWorker(pool, stravaClient, log).WithRewards(rewardSvc).RunLoop(ctx, 5*time.Second)
 	go func() {
 		job := challenge.NewSettlementJob(challengeStore, log)
 		ticker := time.NewTicker(15 * time.Minute)
@@ -126,7 +185,6 @@ func run(log *slog.Logger) error {
 	// ===== Dev mode: login nhanh + mô phỏng callback ZaloPay =====
 	if os.Getenv("DEV_MODE") == "1" {
 		apiSrv.RegisterDevRoutes(mux)
-		key2 := envOr("ZALOPAY_KEY2", "dev-key2")
 		// Mô phỏng ZaloPay bắn callback cho một đơn — đi ĐÚNG đường
 		// HandleCallback thật (verify MAC, idempotent) chứ không cộng điểm tắt.
 		mux.HandleFunc("POST /v1/dev/confirm-payment", func(w http.ResponseWriter, r *http.Request) {
@@ -145,17 +203,15 @@ func run(log *slog.Logger) error {
 				http.Error(w, "đơn không tồn tại", http.StatusNotFound)
 				return
 			}
-			data, _ := json.Marshal(map[string]any{
-				"app_trans_id": body.AppTransID, "amount": priceVND,
-				"zp_trans_id": time.Now().UnixNano(),
-			})
-			h := hmac.New(sha256.New, []byte(key2))
-			h.Write(data)
 			cb, _ := json.Marshal(map[string]any{
-				"data": string(data), "mac": hex.EncodeToString(h.Sum(nil)), "type": 1,
+				"gateway": "DevMock",
+				"transactionDate": time.Now().Format("2006-01-02 15:04:05"),
+				"content": body.AppTransID,
+				"transferType": "in",
+				"transferAmount": priceVND,
 			})
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(paySvc.HandleCallback(r.Context(), cb))
+			json.NewEncoder(w).Encode(paySvc.HandleCallback(r.Context(), "", cb))
 		})
 		log.Warn("DEV_MODE bật: /v1/auth/dev-login và /v1/dev/confirm-payment đang mở")
 	}
@@ -189,14 +245,6 @@ func run(log *slog.Logger) error {
 	return nil
 }
 
-// zaloPayStub: thay bằng client gọi https://openapi.zalopay.vn/v2/create
-// (MAC key1) khi có credential merchant thật.
-type zaloPayStub struct{ log *slog.Logger }
-
-func (z zaloPayStub) CreateOrder(_ context.Context, appTransID string, amountVND int64, desc string) (string, error) {
-	z.log.Info("zalopay stub create order", "app_trans_id", appTransID, "amount", amountVND, "desc", desc)
-	return "https://sb-openapi.zalopay.vn/pay/" + appTransID, nil
-}
 
 type allowAllVerifier struct{}
 
