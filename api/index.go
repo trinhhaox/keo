@@ -222,6 +222,9 @@ func initApp() {
 		WithRewards(reward.NewService(pool, ledgerStore))
 	settleJob = challenge.NewSettlementJob(challengeStore, log)
 
+	// Migration từ runtime (bảo vệ bằng MIGRATE_KEY) — xem api/migrate.go.
+	registerMigrateRoute(mux, pool)
+
 	// CRON Endpoints
 	mux.HandleFunc("POST /api/cron/strava", func(w http.ResponseWriter, r *http.Request) {
 		// Vercel Cron headers check can be added here if needed
