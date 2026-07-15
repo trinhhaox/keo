@@ -1,0 +1,12 @@
+{
+  "buildCommand": "cd web && npm install && npm run build",
+  "outputDirectory": "web/dist",
+  "framework": "vite",
+  "routes": [
+    { "src": "/v1/(.*)", "dest": "/api/index.go" },
+    { "src": "/webhooks/(.*)", "dest": "/api/index.go" },
+    { "src": "/api/cron/(.*)", "dest": "/api/index.go" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
+}

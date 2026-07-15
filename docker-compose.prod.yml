@@ -1,0 +1,55 @@
+# Lệnh chạy Production: docker compose -f docker-compose.prod.yml up -d
+services:
+  db:
+    image: postgres:16
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # Tắt logging statement tĩnh để tăng hiệu năng IO
+    command: ["postgres", "-c", "log_statement=none", "-c", "shared_buffers=256MB"]
+
+  migrate:
+    image: postgres:16
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/work/migrations:ro
+      - ./scripts:/work/scripts:ro
+    working_dir: /work
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    entrypoint: ["bash", "scripts/migrate.sh"]
+
+  app:
+    build: .
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DEV_MODE: "1"
+    ports:
+      - "8888:8080"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  pgdata:
