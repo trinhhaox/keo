@@ -622,7 +622,9 @@ function AppCore({ userProfile, onLogout }) {
     try {
       const [w, cs, m, sh, tx, st, ac, rw] = await Promise.all([
         api.getWallet(), api.listChallenges(), api.myChallenges(), api.getShop(), api.getTransactions(),
-        api.getMyStats(), api.getMyActivities(), api.getRewards(),
+        api.getMyStats(), api.getMyActivities(),
+        // Rewards lỗi không được kéo sập cả app — degrade thành ẩn thẻ thưởng.
+        api.getRewards().catch(() => null),
       ]);
       setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac); setRewards(rw);
     } catch (e) {
