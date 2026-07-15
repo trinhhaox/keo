@@ -1,4 +1,4 @@
-package handler
+package migrations
 
 import (
 	"context"
@@ -12,11 +12,9 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/hao/keo/migrations"
 )
 
-// registerMigrateRoute gắn POST /api/admin/migrate — chạy migration từ runtime
+// RegisterMigrateRoute gắn POST /api/admin/migrate — chạy migration từ runtime
 // Vercel, cùng bookkeeping schema_migrations với scripts/migrate.sh (mỗi file
 // một transaction, idempotent, chạy theo thứ tự tên file).
 //
@@ -27,7 +25,7 @@ import (
 //	{"action":"baseline","through":"008"}  → đánh dấu đã áp tới prefix, KHÔNG chạy SQL
 //	                                         (cho DB từng migrate tay, không có bookkeeping)
 //	{"action":"apply"}                     → chạy lần lượt các migration pending
-func registerMigrateRoute(mux *http.ServeMux, pool *pgxpool.Pool) {
+func RegisterMigrateRoute(mux *http.ServeMux, pool *pgxpool.Pool) {
 	mux.HandleFunc("POST /api/admin/migrate", func(w http.ResponseWriter, r *http.Request) {
 		key := os.Getenv("MIGRATE_KEY")
 		if key == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Migrate-Key")), []byte(key)) != 1 {
@@ -103,7 +101,7 @@ func runMigrateAction(ctx context.Context, pool *pgxpool.Pool, action, through s
 	case "apply":
 		var ran []string
 		for _, v := range pending {
-			sqlBytes, err := migrations.Files.ReadFile(v)
+			sqlBytes, err := Files.ReadFile(v)
 			if err != nil {
 				return nil, fmt.Errorf("read %s: %w", v, err)
 			}
@@ -131,7 +129,7 @@ func runMigrateAction(ctx context.Context, pool *pgxpool.Pool, action, through s
 }
 
 func listMigrationFiles() ([]string, error) {
-	entries, err := fs.ReadDir(migrations.Files, ".")
+	entries, err := fs.ReadDir(Files, ".")
 	if err != nil {
 		return nil, fmt.Errorf("list migrations: %w", err)
 	}
