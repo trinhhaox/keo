@@ -6,6 +6,7 @@
     { "src": "/v1/(.*)", "dest": "/api/index.go" },
     { "src": "/webhooks/(.*)", "dest": "/api/index.go" },
     { "src": "/api/cron/(.*)", "dest": "/api/index.go" },
+    { "src": "/api/admin/(.*)", "dest": "/api/index.go" },
     { "handle": "filesystem" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
