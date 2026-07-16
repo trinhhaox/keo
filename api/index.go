@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -48,9 +47,23 @@ func initApp() {
 	log = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx := context.Background()
 
+	devMode := os.Getenv("DEV_MODE") == "1"
+
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		panic("missing DATABASE_URL")
+	}
+
+	// Ngoài DEV_MODE, secret BẮT BUỘC từ env: JWT_SECRET default nằm công khai
+	// trong repo (forge token = chiếm mọi ví), SEPAY_API_KEY rỗng làm webhook
+	// bỏ verify (POST giả chuyển khoản = mint điểm). Guard này ở cmd/server đã có;
+	// api/index.go mới là entrypoint chạy thật trên Vercel nên phải lặp lại.
+	if !devMode {
+		for _, k := range []string{"JWT_SECRET", "SEPAY_API_KEY"} {
+			if os.Getenv(k) == "" {
+				panic(fmt.Sprintf("thiếu biến môi trường bắt buộc %s (ngoài DEV_MODE)", k))
+			}
+		}
 	}
 
 	poolCfg, err := pgxpool.ParseConfig(dbURL)
@@ -95,7 +108,7 @@ func initApp() {
 	authUserID := restapi.AuthMiddleware(jwtSecret, pool)
 
 	var verifier ingest.AttestationVerifier
-	if os.Getenv("DEV_MODE") == "1" {
+	if devMode {
 		verifier = allowAllVerifier{}
 		log.Warn("DEV_MODE bật: AttestationVerifier bị vô hiệu hóa")
 	} else {
@@ -173,48 +186,6 @@ func initApp() {
 			</body>
 			</html>
 		`))
-	})
-
-	// Endpoint tạm thời để kiểm tra hoạt động Strava thực tế của user từ server Vercel
-	mux.HandleFunc("GET /v1/dev/check-strava", func(w http.ResponseWriter, r *http.Request) {
-		var userID int64
-		var externalUserID string
-		var accessTokenEnc []byte
-
-		err := pool.QueryRow(r.Context(), `
-			SELECT user_id, external_user_id, access_token_enc
-			FROM user_integrations
-			WHERE provider = 'strava'
-			LIMIT 1`,
-		).Scan(&userID, &externalUserID, &accessTokenEnc)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("query DB lỗi: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		// Giải mã token bằng cipherKey của server
-		accessTokenBytes, err := cph.Decrypt(r.Context(), accessTokenEnc)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("giải mã lỗi: %v", err), http.StatusInternalServerError)
-			return
-		}
-		accessToken := string(accessTokenBytes)
-
-		// Gọi Strava API
-		req, _ := http.NewRequest("GET", "https://www.strava.com/api/v3/athlete/activities?per_page=5", nil)
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("gọi Strava lỗi: %v", err), http.StatusInternalServerError)
-			return
-		}
-		defer resp.Body.Close()
-
-		body, _ := io.ReadAll(resp.Body)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		w.Write(body)
 	})
 
 	// WithRewards: thiếu là thưởng km không bao giờ được cấp trên prod —
