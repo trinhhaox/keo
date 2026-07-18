@@ -1161,9 +1161,14 @@ function DeliveryModal({ item, busy, onClose, onConfirm }) {
 
 function txnLabel(t) {
   const names = {
-    purchase: "Nạp điểm", stake_lock: "Đặt cược vào kèo",
-    settlement: "Chốt sổ kèo", redeem: "Đổi thưởng", stake_release: "Hoàn cược",
-    admin_adjust: "Điều chỉnh",
+    purchase: "Nạp điểm",
+    stake_lock: "Đặt cược kèo",
+    settlement: "Nhận thưởng kèo",
+    redeem: "Đổi quà",
+    stake_release: "Hoàn cược",
+    admin_adjust: "Admin điều chỉnh",
+    reward_payout: "Thưởng luyện tập",
+    challenge_reward: "Thưởng thử thách",
   };
   return names[t.type] || t.type;
 }
