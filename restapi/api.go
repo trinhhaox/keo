@@ -60,6 +60,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/me/activities", s.withAuth(s.myActivities))
 	mux.HandleFunc("GET /v1/me/stats", s.withAuth(s.myStats))
 	mux.HandleFunc("POST /v1/redemptions", s.withAuth(s.redeem))
+	mux.HandleFunc("GET /v1/redemptions", s.withAuth(s.listRedemptions))
 	mux.HandleFunc("POST /v1/checkins", s.withAuth(s.postCheckin))
 	mux.HandleFunc("GET /v1/rewards", s.withAuth(s.getRewards))
 	mux.HandleFunc("GET /v1/shop", s.withAuth(s.shop))
@@ -515,4 +516,44 @@ func httpError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// listRedemptions: trả về danh sách quà đã đổi của user
+func (s *Server) listRedemptions(w http.ResponseWriter, r *http.Request, userID int64) {
+	ctx := r.Context()
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.id, r.item_sku, COALESCE(s.name, r.item_sku) as item_name, r.cost_points, r.status, r.created_at, r.fulfillment
+		FROM redemptions r
+		LEFT JOIN shop_items s ON r.item_sku = s.sku
+		WHERE r.user_id = $1
+		ORDER BY r.created_at DESC`,
+		userID,
+	)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "query redemptions failed: "+err.Error())
+		return
+	}
+	defer rows.Close()
+
+	type redemptionResp struct {
+		ID          int64     `json:"id"`
+		ItemSKU     string    `json:"item_sku"`
+		ItemName    string    `json:"item_name"`
+		CostPoints  int64     `json:"cost_points"`
+		Status      string    `json:"status"`
+		CreatedAt   time.Time `json:"created_at"`
+		Fulfillment any       `json:"fulfillment"`
+	}
+
+	var out []redemptionResp = []redemptionResp{}
+	for rows.Next() {
+		var rd redemptionResp
+		err := rows.Scan(&rd.ID, &rd.ItemSKU, &rd.ItemName, &rd.CostPoints, &rd.Status, &rd.CreatedAt, &rd.Fulfillment)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, "scan failed: "+err.Error())
+			return
+		}
+		out = append(out, rd)
+	}
+	writeJSON(w, out)
 }

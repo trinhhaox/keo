@@ -576,6 +576,20 @@ const Chip = ({ active, onClick, children }) => (
   </button>
 );
 
+function getRedemptionStatusBadge(status) {
+  const mapping = {
+    created: { label: "Đang xử lý", color: "#E6A23C", bg: "rgba(230, 162, 60, 0.1)" },
+    fulfilled: { label: "Đã giao", color: "#67C23A", bg: "rgba(103, 194, 58, 0.1)" },
+    cancelled: { label: "Hủy", color: "#F56C6C", bg: "rgba(245, 108, 108, 0.1)" },
+  };
+  const match = mapping[status] || { label: status, color: "#909399", bg: "rgba(144, 147, 153, 0.1)" };
+  return (
+    <span className="text-[10px] font-bold px-2.5 py-1 rounded-full shrink-0" style={{ color: match.color, background: match.bg, border: `1px solid ${match.color}33` }}>
+      {match.label}
+    </span>
+  );
+}
+
 // ===== App Core =====
 function AppCore({ userProfile, onLogout }) {
   const isAdmin = userProfile?.role === "admin";
@@ -599,6 +613,7 @@ function AppCore({ userProfile, onLogout }) {
   const [rewards, setRewards] = useState(null); // { checked_in_today, total_points }
   const [redeemConfirm, setRedeemConfirm] = useState(null);
   const [deliveryForm, setDeliveryForm] = useState(null);
+  const [redemptions, setRedemptions] = useState([]);
 
   // Filter/Sort state
   const [sportFilter, setSportFilter] = useState(null);
@@ -622,13 +637,14 @@ function AppCore({ userProfile, onLogout }) {
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const [w, cs, m, sh, tx, st, ac, rw] = await Promise.all([
+      const [w, cs, m, sh, tx, st, ac, rw, rd] = await Promise.all([
         api.getWallet(), api.listChallenges(), api.myChallenges(), api.getShop(), api.getTransactions(),
         api.getMyStats(), api.getMyActivities(),
         // Rewards lỗi không được kéo sập cả app — degrade thành ẩn thẻ thưởng.
         api.getRewards().catch(() => null),
+        api.getRedemptions().catch(() => []),
       ]);
-      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac); setRewards(rw);
+      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac); setRewards(rw); setRedemptions(rd);
     } catch (e) {
       if (e.status === 401) { onLogout(); }
       else showToast(`Lỗi tải dữ liệu: ${e.message}`, "error");
@@ -843,6 +859,29 @@ function AppCore({ userProfile, onLogout }) {
                     </div>
                   );
                 })}
+
+                {/* Lịch sử đổi quà */}
+                <div className="mt-8 mb-4">
+                  <div className="text-sm font-bold mb-4 uppercase tracking-widest" style={{ color: T.textDim }}>Lịch sử đổi quà</div>
+                  {redemptions.length === 0 ? (
+                    <div className="rounded-2xl p-6 text-center text-sm" style={{ background: T.card, color: T.textDim }}>Chưa có quà đổi nào.</div>
+                  ) : (
+                    redemptions.map((r) => (
+                      <div key={r.id} className="flex justify-between items-center rounded-xl p-4 mb-2.5 transition-all hover:bg-zinc-800" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+                        <div className="min-w-0 flex-1 pr-3">
+                          <div className="text-[13px] font-bold leading-tight" style={{ color: T.text }}>{r.item_name}</div>
+                          <div className="text-[10px] mt-1.5" style={{ color: T.textDim }}>
+                            {new Date(r.created_at).toLocaleString("vi-VN", { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' })}
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <div className="text-xs font-bold" style={{ ...MONO, color: T.text }}>-{Number(r.cost_points).toLocaleString("vi-VN")} ⭐</div>
+                          {getRedemptionStatusBadge(r.status)}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             )}
 
