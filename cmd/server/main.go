@@ -103,12 +103,17 @@ func run(log *slog.Logger) error {
 	adminAuthUserID := restapi.AdminMiddleware(jwtSecret, pool)
 	apiSrv := restapi.NewServer(pool, ledgerStore, challengeStore, authUserID, adminAuthUserID, jwtSecret)
 
+	// ===== Background workers =====
+	rewardSvc := reward.NewService(pool, ledgerStore)
+	stravaWorker := ingest.NewStravaWorker(pool, stravaClient, log).WithRewards(rewardSvc)
+	go stravaWorker.RunLoop(ctx, 5*time.Second)
+
 	// ===== HTTP =====
 	mux := http.NewServeMux()
 	apiSrv.Routes(mux)
 	
 	paySvc.Routes(mux, authUserID)
-	ingestMux := ingest.NewMux(pool, healthSvc, envOr("STRAVA_VERIFY_TOKEN", "dev-verify"), authUserID)
+	ingestMux := ingest.NewMux(pool, healthSvc, envOr("STRAVA_VERIFY_TOKEN", "dev-verify"), authUserID, stravaWorker)
 	mux.Handle("/webhooks/", ingestMux)
 	mux.Handle("/v1/health-sync", ingestMux)
 
@@ -163,8 +168,6 @@ func run(log *slog.Logger) error {
 	})
 
 	// ===== Background workers =====
-	rewardSvc := reward.NewService(pool, ledgerStore)
-	go ingest.NewStravaWorker(pool, stravaClient, log).WithRewards(rewardSvc).RunLoop(ctx, 5*time.Second)
 	go func() {
 		job := challenge.NewSettlementJob(challengeStore, log)
 		ticker := time.NewTicker(15 * time.Minute)

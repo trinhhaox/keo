@@ -9,5 +9,11 @@
     { "src": "/api/admin/(.*)", "dest": "/api/index.go" },
     { "handle": "filesystem" },
     { "src": "/(.*)", "dest": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/strava",
+      "schedule": "0 0 * * *"
+    }
   ]
 }

@@ -134,8 +134,14 @@ func initApp() {
 	mux := http.NewServeMux()
 	apiSrv.Routes(mux)
 
+	// WithRewards: thiếu là thưởng km không bao giờ được cấp trên prod —
+	// cron /api/cron/strava là đường ingest duy nhất ở môi trường serverless.
+	stravaWorker = ingest.NewStravaWorker(pool, stravaClient, log).
+		WithRewards(reward.NewService(pool, ledgerStore))
+	settleJob = challenge.NewSettlementJob(challengeStore, log)
+
 	paySvc.Routes(mux, authUserID)
-	ingestMux := ingest.NewMux(pool, healthSvc, envOr("STRAVA_VERIFY_TOKEN", "dev-verify"), authUserID)
+	ingestMux := ingest.NewMux(pool, healthSvc, envOr("STRAVA_VERIFY_TOKEN", "dev-verify"), authUserID, stravaWorker)
 	mux.Handle("/webhooks/", ingestMux)
 	mux.Handle("/v1/health-sync", ingestMux)
 
@@ -189,17 +195,13 @@ func initApp() {
 		`))
 	})
 
-	// WithRewards: thiếu là thưởng km không bao giờ được cấp trên prod —
-	// cron /api/cron/strava là đường ingest duy nhất ở môi trường serverless.
-	stravaWorker = ingest.NewStravaWorker(pool, stravaClient, log).
-		WithRewards(reward.NewService(pool, ledgerStore))
-	settleJob = challenge.NewSettlementJob(challengeStore, log)
+
 
 	// Migration từ runtime (bảo vệ bằng MIGRATE_KEY) — xem migrations/runner.go.
 	migrations.RegisterMigrateRoute(mux, pool)
 
 	// CRON Endpoints
-	mux.HandleFunc("POST /api/cron/strava", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/cron/strava", func(w http.ResponseWriter, r *http.Request) {
 		// Vercel Cron headers check can be added here if needed
 		ctx, cancel := context.WithTimeout(r.Context(), 9*time.Second)
 		defer cancel()

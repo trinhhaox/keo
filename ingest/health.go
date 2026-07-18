@@ -97,14 +97,8 @@ func (s *HealthSyncService) Sync(ctx context.Context, userID int64, source, atte
 
 // ===== HTTP wiring =====
 
-// NewMux dựng router cho cả hai luồng ingestion. authUserID là hook lấy user
-// từ session/JWT — để interface cho khỏi buộc vào framework auth cụ thể.
-func NewMux(
-	pool *pgxpool.Pool,
-	health *HealthSyncService,
-	stravaVerifyToken string,
-	authUserID func(*http.Request) (int64, error),
-) *http.ServeMux {
+// NewMux gắn các handler: webhook Strava validation + event ingest, và Fit sync.
+func NewMux(pool *pgxpool.Pool, health *HealthSyncService, stravaVerifyToken string, authUserID func(*http.Request) (int64, error), worker *StravaWorker) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Strava validation handshake: GET với hub.challenge phải echo lại.
@@ -132,6 +126,15 @@ func NewMux(
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+
+		// Xử lý tức thì (bất đồng bộ) sự kiện vừa enqueue
+		if worker != nil {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				worker.ProcessOnce(ctx)
+			}()
+		}
 	})
 
 	// Health/Fit sync từ mobile.
