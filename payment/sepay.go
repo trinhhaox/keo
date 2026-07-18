@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,7 +97,7 @@ func (s *Service) HandleCallback(ctx context.Context, apiKeyHeader string, body 
 			s.log.Error("SePay API Key rỗng trên môi trường production!")
 			return map[string]any{"success": false, "message": "unauthorized"}
 		}
-	} else if apiKeyHeader != "Apikey "+s.apiKey {
+	} else if subtle.ConstantTimeCompare([]byte(apiKeyHeader), []byte("Apikey "+s.apiKey)) != 1 {
 		s.log.Warn("SePay webhook sai apikey", "got", apiKeyHeader)
 		return map[string]any{"success": false, "message": "unauthorized"}
 	}

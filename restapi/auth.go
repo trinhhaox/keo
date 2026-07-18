@@ -86,7 +86,7 @@ func ValidateSupabaseJWT(ctx context.Context, tokenStr string, secret []byte, po
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return secret, nil
-	})
+	}, jwt.WithExpirationRequired()) // token không có exp = sống vĩnh viễn → chặn
 
 	if err == nil && token.Valid {
 		claims, ok := token.Claims.(jwt.MapClaims)
@@ -286,7 +286,7 @@ func ValidateSupabaseAdminJWT(ctx context.Context, tokenStr string, secret []byt
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return secret, nil
-	})
+	}, jwt.WithExpirationRequired()) // token không có exp = sống vĩnh viễn → chặn
 
 	if err == nil && token.Valid {
 		claims, ok := token.Claims.(jwt.MapClaims)
