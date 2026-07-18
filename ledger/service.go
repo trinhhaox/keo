@@ -61,6 +61,11 @@ func (s *Service) Redeem(ctx context.Context, userID, cost, redemptionID int64) 
 	return s.Post(ctx, RedeemRequest(userID, cost, redemptionID))
 }
 
+// AdminAdjust điều chỉnh điểm thủ công cho user.
+func (s *Service) AdminAdjust(ctx context.Context, userID, delta int64, refKey string) (Result, error) {
+	return s.Post(ctx, AdminAdjustRequest(userID, delta, refKey))
+}
+
 // SettleChallenge chốt sổ một kèo. Toàn bộ chia thưởng là MỘT transaction —
 // hoặc tất cả cùng nhận, hoặc không ai nhận.
 func (s *Service) SettleChallenge(ctx context.Context, p SettlementParams) (Result, error) {

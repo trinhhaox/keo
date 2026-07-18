@@ -90,3 +90,13 @@ export function syncHealthDemo(source, sport, goalType, goalValue) {
     buckets: [bucket],
   });
 }
+
+// ===== Admin APIs =====
+export const adminListUsers = () => req("GET", "/v1/admin/users");
+export const adminAdjustUserPoints = (id, delta, reason) => req("POST", `/v1/admin/users/${id}/adjust`, { delta, reason });
+export const adminListRedemptions = () => req("GET", "/v1/admin/redemptions");
+export const adminUpdateRedemptionStatus = (id, status, fulfillment) => req("POST", `/v1/admin/redemptions/${id}/status`, { status, fulfillment });
+export const adminListShopItems = () => req("GET", "/v1/admin/shop-items");
+export const adminCreateShopItem = (item) => req("POST", "/v1/admin/shop-items", item);
+export const adminUpdateShopItem = (id, item) => req("PUT", `/v1/admin/shop-items/${id}`, item);
+export const adminDeleteShopItem = (id) => req("DELETE", `/v1/admin/shop-items/${id}`);

@@ -212,3 +212,19 @@ func sortedAccountKeys(entries []Entry) []AccountKey {
 	})
 	return keys
 }
+
+// AdminAdjustRequest: admin điều chỉnh điểm thủ công cho user.
+// point_sale      -delta
+// user_available  +delta
+func AdminAdjustRequest(userID, delta int64, refKey string) Request {
+	return Request{
+		Type:           TxnAdminAdjust,
+		IdempotencyKey: fmt.Sprintf("admin_adjust:user=%d:%s", userID, refKey),
+		Metadata:       map[string]any{"user_id": userID, "ref": refKey},
+		Entries: []Entry{
+			{Account: PointSale(), Amount: -delta},
+			{Account: UserAvailable(userID), Amount: +delta},
+		},
+	}
+}
+

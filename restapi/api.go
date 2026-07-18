@@ -8,10 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hao/keo/challenge"
@@ -39,13 +39,14 @@ type Server struct {
 	challenges *challenge.Store
 	rewards    *reward.Service
 	auth       func(*http.Request) (int64, error)
+	adminAuth  func(*http.Request) (int64, error)
 	jwtSecret  []byte
 }
 
 func NewServer(pool *pgxpool.Pool, l *ledger.PGStore, cs *challenge.Store,
-	auth func(*http.Request) (int64, error), jwtSecret []byte) *Server {
+	auth func(*http.Request) (int64, error), adminAuth func(*http.Request) (int64, error), jwtSecret []byte) *Server {
 	return &Server{pool: pool, ledger: l, challenges: cs,
-		rewards: reward.NewService(pool, l), auth: auth, jwtSecret: jwtSecret}
+		rewards: reward.NewService(pool, l), auth: auth, adminAuth: adminAuth, jwtSecret: jwtSecret}
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
@@ -64,6 +65,16 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/shop", s.withAuth(s.shop))
 	mux.HandleFunc("POST /v1/auth/zalo", s.zaloLogin)
 	mux.HandleFunc("POST /v1/auth/zalo/verify", s.zaloVerify)
+
+	// ===== Admin APIs =====
+	mux.HandleFunc("GET /v1/admin/users", s.withAdminAuth(s.adminListUsers))
+	mux.HandleFunc("POST /v1/admin/users/{id}/adjust", s.withAdminAuth(s.adminAdjustUserPoints))
+	mux.HandleFunc("GET /v1/admin/redemptions", s.withAdminAuth(s.adminListRedemptions))
+	mux.HandleFunc("POST /v1/admin/redemptions/{id}/status", s.withAdminAuth(s.adminUpdateRedemptionStatus))
+	mux.HandleFunc("GET /v1/admin/shop-items", s.withAdminAuth(s.adminListShopItems))
+	mux.HandleFunc("POST /v1/admin/shop-items", s.withAdminAuth(s.adminCreateShopItem))
+	mux.HandleFunc("PUT /v1/admin/shop-items/{id}", s.withAdminAuth(s.adminUpdateShopItem))
+	mux.HandleFunc("DELETE /v1/admin/shop-items/{id}", s.withAdminAuth(s.adminDeleteShopItem))
 }
 
 // RegisterDevRoutes gắn các endpoint CHỈ DÙNG KHI DEV (DEV_MODE=1):
@@ -89,17 +100,46 @@ func (s *Server) RegisterDevRoutes(mux *http.ServeMux) {
 	})
 }
 
+func (s *Server) withAdminAuth(h handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, err := s.adminAuth(r)
+		if err != nil {
+			fmt.Printf("Admin Auth error: %v\n", err)
+			httpError(w, http.StatusUnauthorized, "unauthorized - admin role required")
+			return
+		}
+		h(w, r, userID)
+	}
+}
+
 func (s *Server) shop(w http.ResponseWriter, r *http.Request, _ int64) {
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT sku, name, cost_points, stock, status
+		FROM shop_items
+		WHERE status = 'active'
+		ORDER BY cost_points ASC`)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "query shop items failed")
+		return
+	}
+	defer rows.Close()
+
 	type item struct {
-		SKU  string `json:"sku"`
-		Name string `json:"name"`
-		Cost int64  `json:"cost"`
+		SKU   string `json:"sku"`
+		Name  string `json:"name"`
+		Cost  int64  `json:"cost"`
+		Stock int    `json:"stock"`
 	}
 	out := []item{}
-	for sku, it := range Catalog {
-		out = append(out, item{SKU: sku, Name: it.Name, Cost: it.Cost})
+	for rows.Next() {
+		var it item
+		var status string
+		if err := rows.Scan(&it.SKU, &it.Name, &it.Cost, &it.Stock, &status); err != nil {
+			httpError(w, http.StatusInternalServerError, "scan shop item failed")
+			return
+		}
+		out = append(out, it)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Cost < out[j].Cost })
 	writeJSON(w, out)
 }
 
@@ -376,11 +416,6 @@ func (s *Server) redeem(w http.ResponseWriter, r *http.Request, userID int64) {
 		httpError(w, http.StatusBadRequest, "bad json")
 		return
 	}
-	item, ok := Catalog[body.SKU]
-	if !ok {
-		httpError(w, http.StatusNotFound, "sku không tồn tại")
-		return
-	}
 
 	ctx := r.Context()
 	tx, err := s.pool.Begin(ctx)
@@ -389,6 +424,36 @@ func (s *Server) redeem(w http.ResponseWriter, r *http.Request, userID int64) {
 		return
 	}
 	defer tx.Rollback(ctx)
+
+	// Lấy thông tin sản phẩm và lock row để tránh race condition về tồn kho (stock)
+	var (
+		itemName   string
+		costPoints int64
+		stock      int
+		status     string
+	)
+	err = tx.QueryRow(ctx, `
+		SELECT name, cost_points, stock, status
+		FROM shop_items
+		WHERE sku = $1 FOR UPDATE`,
+		body.SKU,
+	).Scan(&itemName, &costPoints, &stock, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		httpError(w, http.StatusNotFound, "sku không tồn tại")
+		return
+	}
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "query item failed")
+		return
+	}
+	if status != "active" {
+		httpError(w, http.StatusConflict, "sản phẩm không còn được mở bán")
+		return
+	}
+	if stock <= 0 {
+		httpError(w, http.StatusConflict, "sản phẩm đã hết hàng")
+		return
+	}
 
 	// Lấy id trước để derive idempotency key, rồi insert với id tường minh —
 	// redemptions.ledger_txn_id NOT NULL nên ledger phải post trước.
@@ -399,7 +464,7 @@ func (s *Server) redeem(w http.ResponseWriter, r *http.Request, userID int64) {
 		httpError(w, http.StatusInternalServerError, "nextval")
 		return
 	}
-	res, err := s.ledger.PostTx(ctx, tx, ledger.RedeemRequest(userID, item.Cost, redemptionID))
+	res, err := s.ledger.PostTx(ctx, tx, ledger.RedeemRequest(userID, costPoints, redemptionID))
 	if err != nil {
 		if errors.Is(err, ledger.ErrInsufficientBalance) {
 			httpError(w, http.StatusPaymentRequired, "không đủ điểm")
@@ -415,10 +480,19 @@ func (s *Server) redeem(w http.ResponseWriter, r *http.Request, userID int64) {
 		fulfillmentStr = string(body.Fulfillment)
 	}
 
+	// Trừ tồn kho
+	if _, err := tx.Exec(ctx, `
+		UPDATE shop_items SET stock = stock - 1 WHERE sku = $1`,
+		body.SKU,
+	); err != nil {
+		httpError(w, http.StatusInternalServerError, "update stock failed")
+		return
+	}
+
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO redemptions (id, user_id, item_sku, cost_points, ledger_txn_id, fulfillment)
 		OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3, $4, $5, $6)`,
-		redemptionID, userID, body.SKU, item.Cost, res.TxnID, fulfillmentStr,
+		redemptionID, userID, body.SKU, costPoints, res.TxnID, fulfillmentStr,
 	); err != nil {
 		httpError(w, http.StatusInternalServerError, "insert redemption")
 		return
@@ -427,7 +501,7 @@ func (s *Server) redeem(w http.ResponseWriter, r *http.Request, userID int64) {
 		httpError(w, http.StatusInternalServerError, "commit")
 		return
 	}
-	writeJSON(w, map[string]any{"redemption_id": redemptionID, "item": item.Name, "cost": item.Cost})
+	writeJSON(w, map[string]any{"redemption_id": redemptionID, "item": itemName, "cost": costPoints})
 }
 
 // ===== Helpers =====

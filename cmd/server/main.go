@@ -100,7 +100,8 @@ func run(log *slog.Logger) error {
 	
 	paySvc := payment.NewService(pool, ledgerStore, sepayAPIKey, sepayAccountNo, sepayBankCode, log)
 	healthSvc := ingest.NewHealthSyncService(pool, verifier)
-	apiSrv := restapi.NewServer(pool, ledgerStore, challengeStore, authUserID, jwtSecret)
+	adminAuthUserID := restapi.AdminMiddleware(jwtSecret, pool)
+	apiSrv := restapi.NewServer(pool, ledgerStore, challengeStore, authUserID, adminAuthUserID, jwtSecret)
 
 	// ===== HTTP =====
 	mux := http.NewServeMux()

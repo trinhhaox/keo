@@ -46,7 +46,7 @@ func TestIntegrationUserJourney(t *testing.T) {
 	challengeStore := challenge.NewStore(pool, ledgerStore)
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	paySvc := payment.NewService(pool, ledgerStore, sepayKey, "0000", "MB", quiet)
-	apiSrv := NewServer(pool, ledgerStore, challengeStore, auth, []byte("test-jwt"))
+	apiSrv := NewServer(pool, ledgerStore, challengeStore, auth, auth, []byte("test-jwt"))
 
 	mux := http.NewServeMux()
 	apiSrv.Routes(mux)

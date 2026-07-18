@@ -5,6 +5,7 @@ import { T, MONO, SPORTS, SOURCES, GOALS, fmtP, daysLeft } from "./theme.js";
 import LeaderboardSheet from "./leaderboard-sheet.jsx";
 import { StreakCard, ActivityFeed } from "./activity-feed.jsx";
 import { NotificationToast, detectToastType } from "./notification.jsx";
+import AdminDashboard from "./admin-dashboard.jsx";
 
 const SKU_ICONS = { "soap-sinh-duoc": Sparkles, "voucher-sport-500k": Ticket, "gear-trail-shoes": Footprints, "ticket-hn-marathon": Medal, "ticket-sg-night-run": Mountain };
 // Tỷ giá 1 điểm = 1 VNĐ.
@@ -577,6 +578,7 @@ const Chip = ({ active, onClick, children }) => (
 
 // ===== App Core =====
 function AppCore({ userProfile, onLogout }) {
+  const isAdmin = userProfile?.role === "admin";
   const [tab, setTab] = useState("discover");
   const [tabKey, setTabKey] = useState(0); // force re-render for fade animation
   const [wallet, setWallet] = useState({ available: 0, locked: 0 });
@@ -958,11 +960,12 @@ function AppCore({ userProfile, onLogout }) {
                       label: 'Kết nối Strava ⚡',
                       action: async () => {
                         const token = await api.currentToken();
-                        const stravaClientID = "265299";
+                         const stravaClientID = "265299";
                         const redirectURI = `${window.location.origin}/v1/oauth/strava/callback`;
                         window.location.href = `https://www.strava.com/oauth/authorize?client_id=${stravaClientID}&redirect_uri=${encodeURIComponent(redirectURI)}&response_type=code&approval_prompt=auto&scope=read,activity:read_all&state=${token}`;
                       }
                     },
+                    ...(isAdmin ? [{ label: 'Trang Quản trị 🛠️', action: () => switchTab('admin') }] : []),
                   ].map((item, i) => (
                     <button key={i} onClick={item.action} className="w-full flex items-center justify-between px-5 py-4 transition-colors hover:bg-white/5"
                       style={{ borderBottom: `1px solid ${T.line}` }}>
@@ -981,6 +984,12 @@ function AppCore({ userProfile, onLogout }) {
                 </button>
 
                 <div className="text-center text-[11px] mt-4" style={{ color: T.textDim }}>Phiên bản 1.1.0</div>
+              </div>
+            )}
+
+            {tab === "admin" && isAdmin && (
+              <div key={tabKey} className="pb-8 fade-in-up">
+                <AdminDashboard showToast={showToast} />
               </div>
             )}
           </div>
@@ -1183,6 +1192,7 @@ export default function App() {
         name: payload.user_metadata?.full_name || 'Người dùng Zalo',
         email: payload.email || '',
         avatar: payload.user_metadata?.avatar_url || null,
+        role: payload.app_metadata?.role || null,
       };
     } catch (e) {
       localStorage.removeItem("keo_jwt_token");
@@ -1321,6 +1331,7 @@ export default function App() {
       name: u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'Người dùng',
       email: u.email || '',
       avatar: u.user_metadata?.avatar_url || u.user_metadata?.picture || null,
+      role: u.app_metadata?.role || null,
     };
   }
 

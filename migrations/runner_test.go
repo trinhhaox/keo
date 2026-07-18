@@ -27,11 +27,12 @@ func TestIntegrationRunMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	dbName := fmt.Sprintf("mig_test_%d", time.Now().UnixNano())
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+dbName); err != nil {
+	safeDBName := pgx.Identifier{dbName}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+safeDBName); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+dbName+" WITH (FORCE)")
+		admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+safeDBName+" WITH (FORCE)")
 		admin.Close(context.Background())
 	})
 

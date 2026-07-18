@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -90,7 +91,12 @@ type SePayWebhookBody struct {
 
 func (s *Service) HandleCallback(ctx context.Context, apiKeyHeader string, body []byte) map[string]any {
 	// Verify API Key
-	if s.apiKey != "" && apiKeyHeader != "Apikey "+s.apiKey {
+	if s.apiKey == "" {
+		if os.Getenv("DEV_MODE") != "1" {
+			s.log.Error("SePay API Key rỗng trên môi trường production!")
+			return map[string]any{"success": false, "message": "unauthorized"}
+		}
+	} else if apiKeyHeader != "Apikey "+s.apiKey {
 		s.log.Warn("SePay webhook sai apikey", "got", apiKeyHeader)
 		return map[string]any{"success": false, "message": "unauthorized"}
 	}

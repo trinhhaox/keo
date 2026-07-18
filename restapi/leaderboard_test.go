@@ -50,7 +50,7 @@ func TestIntegrationLeaderboardAndStats(t *testing.T) {
 	auth := func(r *http.Request) (int64, error) {
 		return strconv.ParseInt(r.Header.Get("X-User-ID"), 10, 64)
 	}
-	apiSrv := NewServer(pool, ledgerStore, challengeStore, auth, []byte("test-jwt"))
+	apiSrv := NewServer(pool, ledgerStore, challengeStore, auth, auth, []byte("test-jwt"))
 	mux := http.NewServeMux()
 	apiSrv.Routes(mux)
 	ts := httptest.NewServer(mux)
