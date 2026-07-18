@@ -227,12 +227,12 @@ func initApp() {
 		ctx, cancel := context.WithTimeout(r.Context(), 9*time.Second)
 		defer cancel()
 		
-		// Tự phục hồi: Tự động requeue các event failed trước đó để xử lý lại
-		_, _ = pool.Exec(ctx, `
-			UPDATE webhook_inbox 
-			SET status = 'pending', error = '' 
-			WHERE provider = 'strava' AND status = 'failed'
-		`)
+		// Tự phục hồi: đưa event kẹt 'processing' (crash giữa chừng) về lại queue.
+		// KHÔNG còn requeue MỌI 'failed' vô điều kiện — event hỏng vĩnh viễn sẽ
+		// retry vô tận; lỗi tạm thời nay tự retry qua backoff (next_attempt_at).
+		if err := stravaWorker.RequeueStuckProcessing(ctx, 5*time.Minute); err != nil {
+			log.Warn("requeue stuck processing", "err", err)
+		}
 
 		processed := 0
 		for {

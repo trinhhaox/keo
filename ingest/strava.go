@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -89,12 +91,20 @@ func (w *StravaWorker) WithRewards(r RewardAccruer) *StravaWorker {
 
 // RunLoop chạy tới khi ctx hủy. An toàn chạy nhiều instance: SKIP LOCKED.
 func (w *StravaWorker) RunLoop(ctx context.Context, idle time.Duration) {
+	// Dọn event kẹt 'processing' từ lần chạy trước (crash) ngay khi khởi động.
+	if err := w.RequeueStuckProcessing(ctx, 5*time.Minute); err != nil {
+		w.log.Error("requeue stuck processing", "err", err)
+	}
 	for ctx.Err() == nil {
 		n, err := w.ProcessOnce(ctx)
 		if err != nil {
 			w.log.Error("strava worker", "err", err)
 		}
 		if n == 0 {
+			// Không có event đến hạn — dọn stuck rồi nghỉ.
+			if err := w.RequeueStuckProcessing(ctx, 5*time.Minute); err != nil {
+				w.log.Error("requeue stuck processing", "err", err)
+			}
 			select {
 			case <-ctx.Done():
 			case <-time.After(idle):
@@ -103,69 +113,102 @@ func (w *StravaWorker) RunLoop(ctx context.Context, idle time.Duration) {
 	}
 }
 
-// ProcessOnce lấy và xử lý MỘT event pending. Trả về số event đã xử lý (0/1).
+const maxStravaAttempts = 10
+
+// ProcessOnce claim MỘT event đến hạn rồi xử lý theo claim-then-process:
 //
-// Toàn bộ nằm trong một DB transaction: claim event (SKIP LOCKED) → fetch
-// Strava → upsert activity → recompute → mark processed. Crash ở đâu cũng
-// rollback về pending, lần sau xử lý lại; upsert + recompute idempotent nên
-// xử lý lại vô hại.
+//	tx1: đánh dấu 'processing' + commit  → nhả lock/connection
+//	     fetch Strava (NGOÀI tx)
+//	tx2: apply (upsert/recompute/reward) → mark 'processed'
 //
-// Trade-off có chủ đích: gọi HTTP API trong lúc giữ DB tx. Ở volume thấp
-// điều này đơn giản và đúng; khi scale, chuyển sang claim-then-process
-// (tx1 đánh dấu processing → gọi API ngoài tx → tx2 apply) kèm timeout
-// requeue cho event kẹt ở processing.
+// Nhờ vậy call HTTP KHÔNG giữ DB connection (trước đây fetch trong tx: Strava
+// chậm = giữ conn tới hết timeout). Upsert/recompute/reward idempotent nên
+// reprocess (crash giữa chừng → sweeper requeue) vô hại.
+//
+// Lỗi TẠM THỜI (timeout/429/5xx) giữ 'pending' + backoff để tự retry; lỗi VĨNH
+// VIỄN (dữ liệu lạ, 4xx) hoặc hết maxStravaAttempts → 'failed'. Trả 0/1.
 func (w *StravaWorker) ProcessOnce(ctx context.Context) (int, error) {
 	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return 0, fmt.Errorf("begin: %w", err)
+		return 0, fmt.Errorf("begin claim: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
 	var inboxID int64
 	var payload []byte
+	var attempts int
 	err = tx.QueryRow(ctx, `
-		SELECT id, payload FROM webhook_inbox
-		WHERE provider = 'strava' AND status = 'pending'
+		SELECT id, payload, attempts FROM webhook_inbox
+		WHERE provider = 'strava' AND status = 'pending' AND next_attempt_at <= now()
 		ORDER BY id LIMIT 1
 		FOR UPDATE SKIP LOCKED`,
-	).Scan(&inboxID, &payload)
+	).Scan(&inboxID, &payload, &attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, fmt.Errorf("claim: %w", err)
 	}
+	attempts++
+	if _, err := tx.Exec(ctx, `
+		UPDATE webhook_inbox SET status = 'processing', claimed_at = now(), attempts = $2
+		WHERE id = $1`, inboxID, attempts); err != nil {
+		return 0, fmt.Errorf("mark processing: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit claim: %w", err)
+	}
 
-	if err := w.handle(ctx, tx, payload); err != nil {
-		// Lỗi xử lý (API down, dữ liệu lạ): đánh dấu failed kèm lý do để
-		// điều tra, KHÔNG rollback về pending — tránh retry vô hạn chặn queue.
-		// Requeue thủ công/định kỳ sau khi hiểu nguyên nhân.
-		//
-		// BẮT BUỘC rollback tx trước khi mark failed: tx đang giữ FOR UPDATE
-		// trên chính row inbox này, mà UPDATE dưới đây đi bằng connection khác
-		// từ pool — không nhả lock trước là tự deadlock, worker treo vĩnh viễn.
-		tx.Rollback(ctx)
-		if _, mErr := w.pool.Exec(ctx, `
-			UPDATE webhook_inbox SET status = 'failed', error = $1, processed_at = now()
-			WHERE id = $2`, err.Error(), inboxID); mErr != nil {
-			return 0, fmt.Errorf("mark failed: %v (original: %w)", mErr, err)
+	// Xử lý NGOÀI tx claim (gồm cả HTTP Strava).
+	applyErr := w.process(ctx, payload)
+	if applyErr == nil {
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE webhook_inbox SET status = 'processed', processed_at = now(), error = NULL, claimed_at = NULL
+			WHERE id = $1`, inboxID); err != nil {
+			return 0, fmt.Errorf("mark processed: %w", err)
 		}
-		w.log.Error("strava event failed", "inbox_id", inboxID, "err", err)
 		return 1, nil
 	}
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE webhook_inbox SET status = 'processed', processed_at = now()
-		WHERE id = $1`, inboxID); err != nil {
-		return 0, fmt.Errorf("mark processed: %w", err)
+	// Tạm thời + chưa hết lượt → giữ 'pending' với backoff (30s..180s).
+	if isTransient(applyErr) && attempts < maxStravaAttempts {
+		backoffSec := min(attempts, 6) * 30
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE webhook_inbox
+			SET status = 'pending', claimed_at = NULL, error = $2,
+			    next_attempt_at = now() + make_interval(secs => $3)
+			WHERE id = $1`, inboxID, applyErr.Error(), backoffSec); err != nil {
+			return 0, fmt.Errorf("requeue transient: %w", err)
+		}
+		w.log.Warn("strava event tạm lỗi — requeue", "inbox_id", inboxID, "attempt", attempts, "backoff_s", backoffSec, "err", applyErr)
+		return 1, nil
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
+
+	// Vĩnh viễn / hết lượt → failed, chờ điều tra hoặc requeue tay.
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE webhook_inbox SET status = 'failed', error = $2, processed_at = now(), claimed_at = NULL
+		WHERE id = $1`, inboxID, applyErr.Error()); err != nil {
+		return 0, fmt.Errorf("mark failed: %w", err)
 	}
+	w.log.Error("strava event failed", "inbox_id", inboxID, "attempts", attempts, "err", applyErr)
 	return 1, nil
 }
 
-func (w *StravaWorker) handle(ctx context.Context, tx pgx.Tx, payload []byte) error {
+// RequeueStuckProcessing đưa event kẹt ở 'processing' quá olderThan (crash giữa
+// tx1 và tx2, hoặc process quá lâu) về lại 'pending'. Apply idempotent nên vô hại.
+func (w *StravaWorker) RequeueStuckProcessing(ctx context.Context, olderThan time.Duration) error {
+	_, err := w.pool.Exec(ctx, `
+		UPDATE webhook_inbox
+		SET status = 'pending', claimed_at = NULL, next_attempt_at = now()
+		WHERE provider = 'strava' AND status = 'processing'
+		  AND claimed_at < now() - make_interval(secs => $1)`,
+		int(olderThan.Seconds()),
+	)
+	return err
+}
+
+// process phân giải user + fetch Strava (NGOÀI tx) rồi apply trong tx riêng.
+func (w *StravaWorker) process(ctx context.Context, payload []byte) error {
 	var ev StravaEvent
 	if err := json.Unmarshal(payload, &ev); err != nil {
 		return fmt.Errorf("parse: %w", err)
@@ -177,7 +220,7 @@ func (w *StravaWorker) handle(ctx context.Context, tx pgx.Tx, payload []byte) er
 	// Map athlete → user. Không có integration = user chưa từng kết nối
 	// hoặc đã revoke → bỏ qua êm.
 	var userID int64
-	err := tx.QueryRow(ctx, `
+	err := w.pool.QueryRow(ctx, `
 		SELECT user_id FROM user_integrations
 		WHERE provider = 'strava' AND external_user_id = $1 AND revoked_at IS NULL`,
 		fmt.Sprint(ev.OwnerID),
@@ -188,28 +231,13 @@ func (w *StravaWorker) handle(ctx context.Context, tx pgx.Tx, payload []byte) er
 	if err != nil {
 		return fmt.Errorf("resolve user: %w", err)
 	}
-
 	externalID := fmt.Sprint(ev.ObjectID)
 
 	if ev.AspectType == "delete" {
-		// Xóa hoạt động → recompute các kỳ từng chứa nó.
-		var sport string
-		var date time.Time
-		err := tx.QueryRow(ctx, `
-			DELETE FROM activities
-			WHERE source = 'strava' AND external_activity_id = $1
-			RETURNING sport, vn_date`, externalID,
-		).Scan(&sport, &date)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil // chưa từng ingest — không có gì để recompute
-		}
-		if err != nil {
-			return fmt.Errorf("delete activity: %w", err)
-		}
-		return recompute(ctx, tx, userID, sport, ProviderStrava, date)
+		return w.applyDelete(ctx, userID, externalID)
 	}
 
-	// create / update: fetch chi tiết rồi upsert + recompute.
+	// create / update: fetch NGOÀI tx trước, rồi mới apply.
 	sa, err := w.client.GetActivity(ctx, ev.OwnerID, ev.ObjectID)
 	if err != nil {
 		return fmt.Errorf("fetch activity %d: %w", ev.ObjectID, err)
@@ -218,6 +246,44 @@ func (w *StravaWorker) handle(ctx context.Context, tx pgx.Tx, payload []byte) er
 	if sport == "" {
 		return nil // bộ môn ngoài phạm vi app
 	}
+	return w.applyActivity(ctx, userID, externalID, sport, sa)
+}
+
+// applyDelete xóa hoạt động + recompute các kỳ từng chứa nó, trong 1 tx.
+func (w *StravaWorker) applyDelete(ctx context.Context, userID int64, externalID string) error {
+	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var sport string
+	var date time.Time
+	err = tx.QueryRow(ctx, `
+		DELETE FROM activities
+		WHERE source = 'strava' AND external_activity_id = $1
+		RETURNING sport, vn_date`, externalID,
+	).Scan(&sport, &date)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // chưa từng ingest — không có gì để recompute
+	}
+	if err != nil {
+		return fmt.Errorf("delete activity: %w", err)
+	}
+	if err := recompute(ctx, tx, userID, sport, ProviderStrava, date); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// applyActivity upsert hoạt động + recompute (cả kỳ cũ) + thưởng, trong 1 tx.
+func (w *StravaWorker) applyActivity(ctx context.Context, userID int64, externalID, sport string, sa StravaActivity) error {
+	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	act := Activity{
 		UserID:       userID,
 		Source:       ProviderStrava,
@@ -247,5 +313,30 @@ func (w *StravaWorker) handle(ctx context.Context, tx pgx.Tx, payload []byte) er
 			return fmt.Errorf("accrue reward: %w", err)
 		}
 	}
-	return recompute(ctx, tx, userID, sport, ProviderStrava, vnDate(sa.StartDate))
+	if err := recompute(ctx, tx, userID, sport, ProviderStrava, vnDate(sa.StartDate)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// isTransient: lỗi tạm thời đáng retry (timeout, 429, 5xx, lỗi mạng) vs vĩnh
+// viễn (dữ liệu lạ, 4xx) — cái sau retry vô ích, để 'failed' cho điều tra.
+func isTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	for _, sub := range []string{"strava 429", "strava 5", "oauth 5", "timeout", "connection refused", "no such host", "eof", "reset by peer"} {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
