@@ -316,7 +316,9 @@ func (s *Server) createChallenge(w http.ResponseWriter, r *http.Request, userID 
 		feeBps = 0 // miễn phí cho kèo từ thiện
 	}
 
-	id, err := s.challenges.Create(r.Context(), challenge.Challenge{
+	// Tạo kèo + enroll người tạo NGUYÊN TỬ trong 1 tx — "chủ kèo" luôn cược vào
+	// kèo của mình, không để lại kèo mồ côi nếu bước enroll lỗi.
+	id, _, err := s.challenges.CreateWithCreator(r.Context(), challenge.Challenge{
 		CreatorID: userID, Title: body.Title, Sport: body.Sport,
 		GoalType: challenge.GoalType(body.GoalType), GoalValue: body.GoalValue,
 		Source: body.Source, StakePoints: body.StakePoints,
@@ -327,12 +329,6 @@ func (s *Server) createChallenge(w http.ResponseWriter, r *http.Request, userID 
 		CharityID:       body.CharityID,
 	})
 	if err != nil {
-		httpError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	// Người tạo kèo cược luôn — "chủ kèo" không được đứng ngoài trò chơi
-	// của chính mình.
-	if _, err := s.challenges.Join(r.Context(), id, userID); err != nil {
 		writeJoinError(w, err)
 		return
 	}

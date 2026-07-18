@@ -108,11 +108,25 @@ func (s *Store) Join(ctx context.Context, challengeID, userID int64) (int64, err
 		return 0, fmt.Errorf("%w: status=%s", ErrNotJoinable, c.Status)
 	}
 
-	// Khóa cược trước để lấy stake_txn_id (enrollment có FK tới nó).
-	// Idempotent: user retry sẽ replay đúng txn cũ.
-	res, err := s.ledger.PostTx(ctx, tx, ledger.StakeLockRequest(userID, challengeID, c.StakePoints))
+	enrollmentID, err := s.enroll(ctx, tx, c, userID)
 	if err != nil {
 		return 0, err // gồm cả ErrInsufficientBalance — tx đã abort, rollback sạch
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return enrollmentID, nil
+}
+
+// enroll khóa cược + tạo enrollment + sinh sẵn kỳ đánh giá cho (challenge, user)
+// TRONG tx của caller — caller tự commit. Idempotent: đã join thì trả id cũ.
+// c phải đã có ID + StakePoints + GoalType/GoalValue + StartAt/EndAt.
+func (s *Store) enroll(ctx context.Context, tx pgx.Tx, c Challenge, userID int64) (int64, error) {
+	// Khóa cược trước để lấy stake_txn_id (enrollment có FK tới nó).
+	// Idempotent: user retry sẽ replay đúng txn cũ.
+	res, err := s.ledger.PostTx(ctx, tx, ledger.StakeLockRequest(userID, c.ID, c.StakePoints))
+	if err != nil {
+		return 0, err
 	}
 
 	var enrollmentID int64
@@ -121,17 +135,17 @@ func (s *Store) Join(ctx context.Context, challengeID, userID int64) (int64, err
 		VALUES ($1, $2, $3)
 		ON CONFLICT (challenge_id, user_id) DO NOTHING
 		RETURNING id`,
-		challengeID, userID, res.TxnID,
+		c.ID, userID, res.TxnID,
 	).Scan(&enrollmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Đã join từ trước (ledger txn cũng là replay) — idempotent, trả id cũ.
 		if err := tx.QueryRow(ctx,
 			`SELECT id FROM enrollments WHERE challenge_id = $1 AND user_id = $2`,
-			challengeID, userID,
+			c.ID, userID,
 		).Scan(&enrollmentID); err != nil {
 			return 0, fmt.Errorf("fetch existing enrollment: %w", err)
 		}
-		return enrollmentID, tx.Commit(ctx)
+		return enrollmentID, nil
 	}
 	if err != nil {
 		return 0, fmt.Errorf("insert enrollment: %w", err)
@@ -153,9 +167,41 @@ func (s *Store) Join(ctx context.Context, challengeID, userID int64) (int64, err
 	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 		return 0, fmt.Errorf("insert periods: %w", err)
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
-	}
 	return enrollmentID, nil
+}
+
+// CreateWithCreator tạo kèo VÀ enroll người tạo trong MỘT transaction. Trước
+// đây createChallenge gọi Create (commit) rồi Join (tx khác): nếu Join lỗi/crash
+// giữa chừng thì kèo đã tồn tại nhưng chủ kèo chưa vào / chưa khóa cược (mồ côi).
+func (s *Store) CreateWithCreator(ctx context.Context, c Challenge) (int64, int64, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, 0, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var challengeID int64
+	err = tx.QueryRow(ctx, `
+		INSERT INTO challenges
+			(creator_id, title, sport, goal_type, goal_value, source,
+			 stake_points, fee_bps, pass_ratio, start_at, end_at, grace_hours, status, max_participants, is_charity, charity_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15)
+		RETURNING id`,
+		c.CreatorID, c.Title, c.Sport, c.GoalType, c.GoalValue, c.Source,
+		c.StakePoints, c.FeeBps, c.PassRatio, c.StartAt, c.EndAt, c.GraceHours, c.MaxParticipants,
+		c.IsCharity, c.CharityID,
+	).Scan(&challengeID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("create challenge: %w", err)
+	}
+	c.ID = challengeID
+
+	enrollmentID, err := s.enroll(ctx, tx, c, c.CreatorID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, fmt.Errorf("commit: %w", err)
+	}
+	return challengeID, enrollmentID, nil
 }

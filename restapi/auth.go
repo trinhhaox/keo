@@ -121,7 +121,7 @@ func ValidateSupabaseJWT(ctx context.Context, tokenStr string, secret []byte, po
 		req.Header.Set("Authorization", "Bearer "+tokenStr)
 		req.Header.Set("apikey", anonKey)
 		
-		resp, apiErr := http.DefaultClient.Do(req)
+		resp, apiErr := supabaseHTTPClient.Do(req)
 		if apiErr != nil {
 			return 0, fmt.Errorf("supabase api error: %w", apiErr)
 		}
@@ -326,7 +326,7 @@ func ValidateSupabaseAdminJWT(ctx context.Context, tokenStr string, secret []byt
 		req.Header.Set("Authorization", "Bearer "+tokenStr)
 		req.Header.Set("apikey", anonKey)
 		
-		resp, apiErr := http.DefaultClient.Do(req)
+		resp, apiErr := supabaseHTTPClient.Do(req)
 		if apiErr != nil {
 			return 0, fmt.Errorf("supabase api error: %w", apiErr)
 		}

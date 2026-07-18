@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -41,7 +42,19 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := pgxpool.New(ctx, mustEnv("DATABASE_URL"))
+	// Cấu hình pool tường minh: default MaxConns = max(4, numCPU) quá thấp cho
+	// API + webhook + 2 worker dùng chung, mà worker giữ conn suốt lúc gọi Strava.
+	// Override bằng env DB_MAX_CONNS khi cần.
+	poolCfg, err := pgxpool.ParseConfig(mustEnv("DATABASE_URL"))
+	if err != nil {
+		return fmt.Errorf("parse db config: %w", err)
+	}
+	poolCfg.MaxConns = int32(envInt("DB_MAX_CONNS", 20))
+	poolCfg.MinConns = int32(envInt("DB_MIN_CONNS", 2))
+	poolCfg.MaxConnLifetime = 30 * time.Minute
+	poolCfg.MaxConnIdleTime = 5 * time.Minute
+	poolCfg.HealthCheckPeriod = 30 * time.Second
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return fmt.Errorf("connect db: %w", err)
 	}
@@ -130,9 +143,14 @@ func run(log *slog.Logger) error {
 	apiSrv := restapi.NewServer(pool, ledgerStore, challengeStore, authUserID, adminAuthUserID, jwtSecret)
 
 	// ===== Background workers =====
+	// wg để drain worker trước khi pool.Close() (defer) — nếu không, đóng pool
+	// lúc worker còn giữ transaction sẽ hỏng dở dang.
+	var wg sync.WaitGroup
 	rewardSvc := reward.NewService(pool, ledgerStore)
 	stravaWorker := ingest.NewStravaWorker(pool, stravaClient, log).WithRewards(rewardSvc)
-	go stravaWorker.RunLoop(ctx, 5*time.Second)
+	supervise(ctx, &wg, log, "strava", func(c context.Context) {
+		stravaWorker.RunLoop(c, 5*time.Second)
+	})
 
 	// ===== HTTP =====
 	mux := http.NewServeMux()
@@ -195,21 +213,21 @@ func run(log *slog.Logger) error {
 	})
 
 	// ===== Background workers =====
-	go func() {
+	supervise(ctx, &wg, log, "settlement", func(c context.Context) {
 		job := challenge.NewSettlementJob(challengeStore, log)
 		ticker := time.NewTicker(15 * time.Minute)
 		defer ticker.Stop()
 		for {
-			if err := job.Run(ctx, time.Now(), 100); err != nil {
+			if err := job.Run(c, time.Now(), 100); err != nil {
 				log.Error("settlement job", "err", err)
 			}
 			select {
-			case <-ctx.Done():
+			case <-c.Done():
 				return
 			case <-ticker.C:
 			}
 		}
-	}()
+	})
 
 	addr := envOr("LISTEN_ADDR", ":8080")
 
@@ -286,7 +304,40 @@ func run(log *slog.Logger) error {
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	// H4: HTTP đã dừng — chờ background worker thoát TRƯỚC khi defer pool.Close()
+	// chạy, tránh đóng pool lúc worker còn giữ transaction dở dang.
+	log.Info("HTTP dừng, chờ worker drain")
+	wg.Wait()
+	log.Info("worker đã drain — đóng pool")
 	return nil
+}
+
+// supervise chạy một worker loop trong goroutine có: (1) recover panic + tự
+// restart — net/http chỉ recover panic của handler, KHÔNG bảo vệ background
+// goroutine, một panic là worker chết im lặng vĩnh viễn; (2) đăng ký WaitGroup
+// để main drain sạch trước khi đóng pool.
+func supervise(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger, name string, loop func(context.Context)) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for ctx.Err() == nil {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Error("worker panic — restart", "worker", name, "panic", r)
+					}
+				}()
+				loop(ctx)
+			}()
+			// loop trả về: ctx hủy → thoát; panic → nghỉ ngắn rồi restart.
+			if ctx.Err() == nil {
+				select {
+				case <-ctx.Done():
+				case <-time.After(time.Second):
+				}
+			}
+		}
+	}()
 }
 
 
@@ -317,6 +368,15 @@ func maxBodyBytes(next http.Handler, n int64) http.Handler {
 		r.Body = http.MaxBytesReader(w, r.Body, n)
 		next.ServeHTTP(w, r)
 	})
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
 }
 
 func isAllZero(b []byte) bool {

@@ -19,6 +19,10 @@ var (
 	zaloTokensCache = make(map[string]time.Time)
 )
 
+// zaloHTTPClient có timeout — http.DefaultClient không có, Zalo treo là giữ
+// goroutine/handler vô hạn.
+var zaloHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 type ZaloTokenResponse struct {
 	AccessToken string `json:"access_token"`
 	Error       int    `json:"error"`
@@ -63,7 +67,7 @@ func (s *Server) zaloLogin(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("secret_key", secretKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := zaloHTTPClient.Do(req)
 	if err != nil {
 		httpError(w, http.StatusBadGateway, fmt.Sprintf("failed to contact Zalo OAuth API: %v", err))
 		return
@@ -144,7 +148,7 @@ func (s *Server) zaloVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	zaloReq.Header.Set("access_token", body.ZaloAccessToken)
 
-	zaloResp, err := http.DefaultClient.Do(zaloReq)
+	zaloResp, err := zaloHTTPClient.Do(zaloReq)
 	if err != nil {
 		httpError(w, http.StatusBadGateway, fmt.Sprintf("failed to connect to Zalo Graph API: %v", err))
 		return

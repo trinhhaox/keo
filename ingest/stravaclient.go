@@ -79,11 +79,15 @@ func (c *HTTPStravaClient) base() string {
 	return "https://www.strava.com"
 }
 
+// defaultStravaHTTPClient có timeout — http.DefaultClient không có, để Strava
+// treo là giữ DB tx + connection vô hạn (GetActivity chạy trong tx của worker).
+var defaultStravaHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
 func (c *HTTPStravaClient) hc() *http.Client {
 	if c.HC != nil {
 		return c.HC
 	}
-	return http.DefaultClient
+	return defaultStravaHTTPClient
 }
 
 type tokenResponse struct {
