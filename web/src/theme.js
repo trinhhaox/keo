@@ -3,8 +3,8 @@
 import { Footprints, Zap, Waves, Bike, Dumbbell, Trophy, Activity, HeartPulse, Smartphone } from "lucide-react";
 
 export const T = {
-  bg: "#090B0E", paper: "#161920", card: "#1B1F27",
-  text: "#FFFFFF", textDim: "#8B949E",
+  bg: "#090B0E", bgDim: "#101318", paper: "#161920", card: "#1B1F27",
+  text: "#FFFFFF", ink: "#F0F3F6", textDim: "#8B949E",
   brand: "#CCFF00", brandDark: "#99BF00",
   green: "#00E676", red: "#FF3B30", strava: "#FC4C02",
   gray: "#8B949E", line: "#2D333B",

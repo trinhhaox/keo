@@ -456,7 +456,7 @@ function MyChallengeCard({ c, onSync, busy, onBoard, onShare }) {
           </div>
         </div>
         {settled && <span className="text-xs font-bold px-2.5 py-1 rounded-full shrink-0"
-          style={{ background: won ? "#E7F5EC" : "#FDEBEC", color: won ? T.green : T.red }}>
+          style={{ background: won ? "rgba(0,230,118,0.15)" : "rgba(255,59,48,0.15)", color: won ? T.green : T.red, border: `1px solid ${won ? T.green : T.red}33` }}>
           {won ? "✓ Về đích" : "✗ Rớt kèo"}
         </span>}
       </div>
@@ -475,7 +475,7 @@ function MyChallengeCard({ c, onSync, busy, onBoard, onShare }) {
       </div>
 
       {!settled && (c.source === "strava" ? (
-        <div className="rounded-xl px-3 py-2.5 mb-3 text-[11px] font-semibold" style={{ background: "#FEEDE5", color: T.strava }}>
+        <div className="rounded-xl px-3 py-2.5 mb-3 text-[11px] font-semibold" style={{ background: "rgba(252,76,2,0.12)", color: T.strava, border: `1px solid ${T.strava}33` }}>
           ⚡ Hoạt động Strava được đồng bộ tự động — không cần thao tác thủ công
         </div>
       ) : (
@@ -850,6 +850,8 @@ function AppCore({ userProfile, onLogout }) {
   const [deliveryForm, setDeliveryForm] = useState(null);
   const [redemptions, setRedemptions] = useState([]);
   const [charityStats, setCharityStats] = useState({ "1001": 0, "1002": 0, "1003": 0 });
+  const [loadError, setLoadError] = useState(null);   // lỗi tải dữ liệu ban đầu → hiện banner Retry
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   // Filter/Sort state
   const [sportFilter, setSportFilter] = useState(null);
@@ -882,9 +884,13 @@ function AppCore({ userProfile, onLogout }) {
         api.getCharitiesStats().catch(() => ({ "1001": 0, "1002": 0 })),
       ]);
       setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac); setRewards(rw); setRedemptions(rd); setCharityStats(ch);
+      setLoadError(null);
     } catch (e) {
       if (e.status === 401) { onLogout(); }
-      else showToast(`Lỗi tải dữ liệu: ${e.message}`, "error");
+      else {
+        setLoadError(e.message);          // giữ trạng thái lỗi → banner Retry, không chỉ toast thoáng qua
+        showToast(`Lỗi tải dữ liệu: ${e.message}`, "error");
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -920,6 +926,29 @@ function AppCore({ userProfile, onLogout }) {
     setTabKey(prev => prev + 1);
     load();
   };
+
+  // ===== Nút back cứng (webview Zalo Mini App) =====
+  // Đóng overlay trên cùng, hoặc quay về tab Khám phá — KHÔNG để back thoát app
+  // (Zalo có nút đóng riêng ở thanh native; back trong app điều hướng nội bộ như
+  // app native). Handler mount-once đọc state mới nhất qua ref.
+  const backStateRef = useRef({});
+  backStateRef.current = { tab, paymentQR, redeemConfirm, deliveryForm, creating, joining, board };
+  useEffect(() => {
+    window.history.pushState({ keo: true }, "");
+    const onPop = () => {
+      const s = backStateRef.current;
+      if (s.paymentQR) setPaymentQR(null);
+      else if (s.redeemConfirm) setRedeemConfirm(null);
+      else if (s.deliveryForm) setDeliveryForm(null);
+      else if (s.creating) setCreating(false);
+      else if (s.joining) setJoining(null);
+      else if (s.board != null) setBoard(null);
+      else if (s.tab !== "discover") { setTab("discover"); setTabKey((k) => k + 1); }
+      window.history.pushState({ keo: true }, ""); // luôn tái vũ trang, không thoát app
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const act = async (fn, okMsg, okType) => {
     setBusy(true);
@@ -970,7 +999,7 @@ function AppCore({ userProfile, onLogout }) {
       <div className="relative w-full max-w-[400px] min-h-screen flex flex-col hide-scrollbar" style={{ background: T.bg }}>
         <>
           {/* Header */}
-          <div className="px-6 pt-8 pb-5 flex items-center justify-between sticky top-0 z-20 glass-panel" style={{ background: "rgba(9,11,14,0.85)", borderBottom: `1px solid ${T.line}` }}>
+          <div className="px-6 pb-5 flex items-center justify-between sticky top-0 z-20 glass-panel" style={{ background: "rgba(9,11,14,0.85)", borderBottom: `1px solid ${T.line}`, paddingTop: "calc(2rem + env(safe-area-inset-top))" }}>
             <div>
               <div className="text-3xl leading-none text-glow tracking-tight" style={{ fontFamily: "'Archivo Black', sans-serif", color: T.text }}>
                 KÈO<span style={{ color: T.brand }}>.</span>
@@ -998,6 +1027,19 @@ function AppCore({ userProfile, onLogout }) {
 
           {/* Nội dung */}
           <div className="flex-1 overflow-y-auto px-5 pt-6 pb-32">
+            {loadError && (
+              <div className="rounded-2xl p-4 mb-5 flex items-center gap-3" style={{ background: "rgba(255,59,48,0.1)", border: `1px solid ${T.red}33` }}>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold" style={{ color: T.red }}>Không tải được dữ liệu</div>
+                  <div className="text-xs mt-0.5 truncate" style={{ color: T.textDim }}>{loadError}</div>
+                </div>
+                <button onClick={() => { setLoading(true); load(); }} disabled={refreshing}
+                  className="shrink-0 px-4 py-2.5 rounded-xl font-bold text-xs active:scale-95 transition-transform"
+                  style={{ background: T.brand, color: T.bg }}>
+                  Thử lại
+                </button>
+              </div>
+            )}
             {tab === "discover" && (
               <div key={tabKey} className="fade-in-up">
                 <div className="rounded-3xl p-6 mb-6 relative overflow-hidden group" style={{ background: T.card, border: `1px solid ${T.brand}40` }}>
@@ -1293,7 +1335,7 @@ function AppCore({ userProfile, onLogout }) {
                 </div>
 
                 {/* Đăng xuất */}
-                <button onClick={onLogout}
+                <button onClick={() => setShowLogoutConfirm(true)}
                   className="w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-transform active:scale-95"
                   style={{ background: 'rgba(255,59,48,0.1)', color: '#FF3B30', border: '1px solid rgba(255,59,48,0.2)' }}>
                   <LogOut size={18} />
@@ -1313,7 +1355,7 @@ function AppCore({ userProfile, onLogout }) {
 
 
           {/* Tab bar - Floating Pill */}
-          <div className="fixed bottom-6 w-full max-w-[400px] px-5 z-30 pointer-events-none">
+          <div className="fixed w-full max-w-[400px] px-5 z-30 pointer-events-none" style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}>
             <div className="glass-panel rounded-[32px] p-2 flex justify-between items-center pointer-events-auto">
               {[
                 { k: "discover", icon: Flame, label: "Khám phá" },
@@ -1394,6 +1436,29 @@ function AppCore({ userProfile, onLogout }) {
               )} />
           )}
 
+          {showLogoutConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setShowLogoutConfirm(false)}>
+              <div className="w-full max-w-sm rounded-3xl p-6 relative overflow-hidden text-center scale-in" style={{ background: T.card, border: `1px solid ${T.line}` }} onClick={e => e.stopPropagation()}>
+                <div className="text-lg font-black mb-2 uppercase tracking-wider" style={{ color: T.text }}>Đăng xuất?</div>
+                <div className="text-sm font-medium mb-6 leading-relaxed" style={{ color: T.textDim }}>
+                  Bạn sẽ cần đăng nhập lại để tiếp tục theo dõi kèo và điểm của mình.
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setShowLogoutConfirm(false)}
+                    className="flex-1 py-3 rounded-xl font-bold text-xs uppercase tracking-widest active:scale-[.98] transition-transform"
+                    style={{ background: "rgba(255,255,255,0.05)", border: `1px solid ${T.line}`, color: T.textDim }}>
+                    Ở lại
+                  </button>
+                  <button onClick={onLogout}
+                    className="flex-1 py-3 rounded-xl font-bold text-xs uppercase tracking-widest active:scale-[.98] transition-transform"
+                    style={{ background: "rgba(255,59,48,0.15)", border: `1px solid ${T.red}55`, color: T.red }}>
+                    Đăng xuất
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <LeaderboardSheet challengeID={board} onClose={() => setBoard(null)} />
           <JoinModal c={joining} wallet={wallet} busy={busy} setTab={switchTab}
             onConfirm={(c) => act(async () => { await api.joinChallenge(c.id); setJoining(null); }, "Đã chốt kèo! Điểm cược được khóa 🔒", "success")}
@@ -1415,13 +1480,15 @@ function DeliveryModal({ item, busy, onClose, onConfirm }) {
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [note, setNote] = useState("");
+  const [err, setErr] = useState("");   // lỗi validation inline thay cho alert() native
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!name.trim() || !phone.trim() || !address.trim()) {
-      alert("Vui lòng điền đầy đủ Họ tên, Số điện thoại và Địa chỉ nhận hàng!");
+      setErr("Vui lòng điền đầy đủ Họ tên, Số điện thoại và Địa chỉ nhận hàng.");
       return;
     }
+    setErr("");
     onConfirm({ name, phone, address, note });
   };
 
@@ -1459,6 +1526,12 @@ function DeliveryModal({ item, busy, onClose, onConfirm }) {
           className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none mb-5"
           style={{ ...MONO, background: T.bg, color: T.text, border: `1px solid ${T.line}` }} />
 
+        {err && (
+          <div className="text-xs font-semibold mb-3 px-3 py-2 rounded-lg" role="alert" aria-live="polite"
+            style={{ background: "rgba(255,59,48,0.1)", color: T.red, border: `1px solid ${T.red}33` }}>
+            {err}
+          </div>
+        )}
         <div className="flex gap-3">
           <button type="button" onClick={onClose} disabled={busy}
             className="flex-1 py-3 rounded-xl font-bold text-xs uppercase tracking-widest text-center active:scale-[.98] transition-transform"
