@@ -292,7 +292,23 @@ func run(log *slog.Logger) error {
 
 	// H7: chặn body khổng lồ (DoS cạn RAM) cho MỌI endpoint tại một chỗ. Webhook/
 	// health-sync đã tự LimitReader 1MiB nên trần 2MiB ở đây trong suốt với chúng.
-	handler := secureHeaders(maxBodyBytes(mux, 2<<20))
+	// Rate-limit brute-force cho /v1/auth (30 req/phút/IP, burst 10). Chỉ hiệu
+	// quả trên binary chạy dài; serverless/edge nên rate-limit tại Cloudflare.
+	authLimiter := newRateLimiter(0.5, 10)
+	supervise(ctx, &wg, log, "ratelimit-cleanup", func(c context.Context) {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.Done():
+				return
+			case <-ticker.C:
+				authLimiter.cleanup(time.Now(), 10*time.Minute)
+			}
+		}
+	})
+
+	handler := secureHeaders(authLimiter.middleware(maxBodyBytes(mux, 2<<20), "/v1/auth"))
 
 	// H1: đủ bộ timeout — ReadHeaderTimeout đơn lẻ không chặn slow-loris ở body,
 	// request treo giữ goroutine vô hạn, và ghi response không có trần thời gian.
