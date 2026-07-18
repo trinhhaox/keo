@@ -11,6 +11,7 @@ type GoalType string
 
 const (
 	GoalDailySteps       GoalType = "daily_steps"
+	GoalDailyDistanceKm  GoalType = "daily_distance_km"
 	GoalWeeklyDistanceKm GoalType = "weekly_distance_km"
 	GoalWeeklySessions   GoalType = "weekly_sessions"
 )

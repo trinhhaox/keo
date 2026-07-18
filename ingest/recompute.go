@@ -128,7 +128,7 @@ func recompute(ctx context.Context, tx pgx.Tx, userID int64, sport, source strin
 		switch p.goalType {
 		case "daily_steps":
 			agg = `COALESCE(SUM(steps), 0)`
-		case "weekly_distance_km":
+		case "weekly_distance_km", "daily_distance_km":
 			agg = `COALESCE(SUM(distance_m), 0) / 1000.0`
 		case "weekly_sessions":
 			agg = `COALESCE(SUM(sessions), 0)`

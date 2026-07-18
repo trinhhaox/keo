@@ -26,8 +26,9 @@ export const SOURCES = {
 
 export const GOALS = {
   daily_steps: { label: "bước/ngày", sports: ["walk"] },
-  weekly_distance_km: { label: "km/tuần", sports: ["run", "bike", "swim"] },
-  weekly_sessions: { label: "buổi/tuần", sports: ["gym", "swim"] },
+  daily_distance_km: { label: "km/ngày", sports: ["run", "bike"] },
+  weekly_distance_km: { label: "km/tuần", sports: ["swim"] },
+  weekly_sessions: { label: "buổi/tuần", sports: ["gym"] },
 };
 
 export const fmtP = (n) => Number(n).toLocaleString("vi-VN") + " điểm";

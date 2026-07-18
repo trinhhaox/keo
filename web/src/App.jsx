@@ -447,20 +447,58 @@ function Row({ label, value, color }) {
 // ===== Tạo kèo =====
 function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
   const [sport, setSport] = useState("run");
-  const [goalType, setGoalType] = useState("weekly_distance_km");
-  const [goal, setGoal] = useState(20);
-  const [days, setDays] = useState(30);
-  const [stake, setStake] = useState(200);
+  const [goalType, setGoalType] = useState("daily_distance_km");
+  const [goal, setGoal] = useState(5);
+  const [stake, setStake] = useState(10);
   const [source, setSource] = useState("strava");
   const [maxParticipants, setMaxParticipants] = useState(10);
   const [startAt, setStartAt] = useState(() => new Date().toISOString().split('T')[0]);
+  const [endAt, setEndAt] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().split('T')[0];
+  });
+
+  // Đồng bộ stake mặc định khi mở modal hoặc ví khả dụng thay đổi
+  useEffect(() => {
+    if (open && wallet?.available > 0) {
+      setStake(Math.min(200, Math.floor(wallet.available / 10) * 10 || 10));
+    } else {
+      setStake(10);
+    }
+  }, [wallet?.available, open]);
+
   if (!open) return null;
+
   const enough = wallet?.available >= stake;
+  const days = Math.max(1, Math.ceil((new Date(endAt) - new Date(startAt)) / 86400000));
+
   const pickSport = (k) => {
     setSport(k);
     const gt = Object.entries(GOALS).find(([, v]) => v.sports.includes(k));
-    if (gt) setGoalType(gt[0]);
+    if (gt) {
+      setGoalType(gt[0]);
+      if (k === "walk") setGoal(10000);
+      else if (k === "run" || k === "bike") setGoal(5);
+      else if (k === "swim") setGoal(2);
+      else if (k === "gym") setGoal(3);
+    }
   };
+
+  const handleStartAtChange = (val) => {
+    setStartAt(val);
+    if (new Date(endAt) <= new Date(val)) {
+      const d = new Date(val);
+      d.setDate(d.getDate() + 30);
+      setEndAt(d.toISOString().split('T')[0]);
+    }
+  };
+
+  const handleEndAtChange = (val) => {
+    if (new Date(val) <= new Date(startAt)) return;
+    setEndAt(val);
+  };
+
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
       <div className="w-full max-w-sm rounded-3xl p-6 relative overflow-y-auto max-h-[85vh] scale-in" style={{ background: T.card, border: `1px solid ${T.line}` }} onClick={(e) => e.stopPropagation()}>
@@ -478,38 +516,31 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
           })}
         </div>
 
-        <Label>Kiểu mục tiêu</Label>
-        <div className="flex flex-wrap gap-2 mb-4">
-          {Object.entries(GOALS).map(([k, v]) => (
-            <Chip key={k} active={goalType === k} onClick={() => setGoalType(k)}>{v.label}</Chip>
-          ))}
-        </div>
-
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div>
-            <Label>Mục tiêu ({GOALS[goalType].label})</Label>
+            <Label>Mục tiêu ({GOALS[goalType]?.label || "đơn vị"})</Label>
             <input type="number" value={goal} onChange={(e) => setGoal(+e.target.value)}
               className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
               style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
           </div>
-          <div>
-            <Label>Thời hạn (ngày)</Label>
-            <input type="number" value={days} onChange={(e) => setDays(+e.target.value)}
-              className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
-              style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 mb-4">
           <div>
             <Label>Tối đa (người)</Label>
             <input type="number" value={maxParticipants} onChange={(e) => setMaxParticipants(+e.target.value)}
               className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
               style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
           </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-4">
           <div>
             <Label>Ngày bắt đầu</Label>
-            <input type="date" value={startAt} onChange={(e) => setStartAt(e.target.value)}
+            <input type="date" value={startAt} onChange={(e) => handleStartAtChange(e.target.value)}
+              className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
+              style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
+          </div>
+          <div>
+            <Label>Ngày kết thúc</Label>
+            <input type="date" value={endAt} min={startAt} onChange={(e) => handleEndAtChange(e.target.value)}
               className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
               style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
           </div>
@@ -530,18 +561,33 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
         </div>
 
         <Label>Điểm cược mỗi người</Label>
-        <div className="flex gap-2 mb-5">
-          {[100, 200, 500, 1000].map((v) => (
-            <button key={v} onClick={() => setStake(v)}
-              className="flex-1 py-2.5 rounded-xl text-[13px] font-bold"
-              style={{ ...MONO, background: stake === v ? T.brand : T.paper, color: T.text }}>{v}</button>
-          ))}
+        <div className="rounded-2xl p-4 mb-5" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
+          <div className="flex justify-between items-center mb-2">
+            <div className="text-xs font-semibold" style={{ color: T.textDim }}>Số điểm cược:</div>
+            <div className="text-base font-black text-glow" style={{ ...MONO, color: T.brand }}>
+              {fmtP(stake)}
+            </div>
+          </div>
+          <input 
+            type="range" 
+            min="10" 
+            max={Math.max(10, wallet?.available || 0)} 
+            step="10"
+            value={stake} 
+            onChange={(e) => setStake(Number(e.target.value))}
+            disabled={!wallet?.available || wallet.available < 10}
+            className="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-[#CCFF00] focus:outline-none" 
+          />
+          <div className="flex justify-between text-[10px] font-bold mt-1.5" style={{ color: T.textDim }}>
+            <span>Min: 10</span>
+            <span>Ví khả dụng: {Number(wallet?.available || 0).toLocaleString("vi-VN")} pts</span>
+          </div>
         </div>
 
         {enough ? (
           <button disabled={busy}
             onClick={() => onCreate({
-              title: `${SPORTS[sport].label} ${goal.toLocaleString("vi-VN")} ${GOALS[goalType].label}`,
+              title: `${SPORTS[sport].label} ${goal.toLocaleString("vi-VN")} ${GOALS[goalType]?.label || ""}`,
               sport, goal_type: goalType, goal_value: goal, source,
               stake_points: stake, duration_days: days, max_participants: maxParticipants,
               start_at: startAt,

@@ -78,6 +78,9 @@ func initApp() {
 		panic(fmt.Sprintf("connect db: %v", err))
 	}
 
+	// Đảm bảo enum goal_type hỗ trợ daily_distance_km
+	_, _ = pool.Exec(ctx, `ALTER TYPE goal_type ADD VALUE IF NOT EXISTS 'daily_distance_km'`)
+
 	// ===== Services =====
 	ledgerStore := ledger.NewPGStore(pool)
 	challengeStore := challenge.NewStore(pool, ledgerStore)

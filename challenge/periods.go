@@ -38,7 +38,7 @@ func GeneratePeriods(gt GoalType, goalValue float64, startAt, endAt time.Time, l
 
 	var periods []Period
 	switch gt {
-	case GoalDailySteps:
+	case GoalDailySteps, GoalDailyDistanceKm:
 		for d := 0; d < totalDays; d++ {
 			s := start.AddDate(0, 0, d)
 			periods = append(periods, Period{Start: s, End: s.AddDate(0, 0, 1), Target: goalValue})
