@@ -114,7 +114,7 @@ func NewMux(pool *pgxpool.Pool, health *HealthSyncService, stravaVerifyToken str
 		})
 	})
 
-	// Strava event: chỉ enqueue rồi 200 ngay (yêu cầu <2s).
+	// Strava event: nhận webhook, lưu và xử lý đồng bộ nhanh để tránh đóng băng Serverless.
 	mux.HandleFunc("POST /webhooks/strava", func(w http.ResponseWriter, r *http.Request) {
 		payload, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
@@ -131,24 +131,22 @@ func NewMux(pool *pgxpool.Pool, health *HealthSyncService, stravaVerifyToken str
 			http.Error(w, "enqueue failed", http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
 
-		slog.Info("strava webhook enqueued successfully")
-
-		// Xử lý tức thì (bất đồng bộ) sự kiện vừa enqueue
+		// Xử lý đồng bộ ngay lập tức trong request webhook (giới hạn timeout 2.5 giây để tránh timeout 3s của Strava)
 		if worker != nil {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				slog.Info("triggering real-time process for strava event")
-				n, err := worker.ProcessOnce(ctx)
-				if err != nil {
-					slog.Error("real-time strava process failed", "err", err)
-				} else {
-					slog.Info("real-time strava process completed", "processed", n)
-				}
-			}()
+			syncCtx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+			defer cancel()
+			slog.Info("processing strava event synchronously")
+			_, err := worker.ProcessOnce(syncCtx)
+			if err != nil {
+				slog.Error("synchronous strava process failed", "err", err)
+			} else {
+				slog.Info("synchronous strava process completed")
+			}
 		}
+
+		w.WriteHeader(http.StatusOK)
+		slog.Info("strava webhook handled and enqueued successfully")
 	})
 
 	// Health/Fit sync từ mobile.
