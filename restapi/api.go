@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -106,7 +107,7 @@ func (s *Server) withAdminAuth(h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, err := s.adminAuth(r)
 		if err != nil {
-			fmt.Printf("Admin Auth error: %v\n", err)
+			slog.Debug("admin auth thất bại", "err", err)
 			httpError(w, http.StatusUnauthorized, "unauthorized - admin role required")
 			return
 		}
@@ -151,7 +152,7 @@ func (s *Server) withAuth(h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, err := s.auth(r)
 		if err != nil {
-			fmt.Printf("Auth error: %v\n", err)
+			slog.Debug("auth thất bại", "err", err)
 			httpError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
@@ -162,13 +163,17 @@ func (s *Server) withAuth(h handler) http.HandlerFunc {
 // ===== Ví =====
 
 func (s *Server) getWallet(w http.ResponseWriter, r *http.Request, userID int64) {
-	ctx := r.Context()
-	available, err := s.ledger.Balance(ctx, ledger.UserAvailable(userID))
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, "read balance")
-		return
-	}
-	locked, err := s.ledger.Balance(ctx, ledger.UserLocked(userID))
+	// Một round-trip cho cả available + locked (trước là 2 lần Balance()).
+	var available, locked int64
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT
+			COALESCE(SUM(b.balance) FILTER (WHERE a.type = 'user_available'), 0),
+			COALESCE(SUM(b.balance) FILTER (WHERE a.type = 'user_locked'), 0)
+		FROM ledger_accounts a
+		LEFT JOIN account_balances b ON b.account_id = a.id
+		WHERE a.user_id = $1 AND a.type IN ('user_available', 'user_locked')`,
+		userID,
+	).Scan(&available, &locked)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "read balance")
 		return
@@ -350,7 +355,7 @@ func (s *Server) joinChallenge(w http.ResponseWriter, r *http.Request, userID in
 }
 
 func writeJoinError(w http.ResponseWriter, err error) {
-	fmt.Printf("Join error: %v\n", err)
+	slog.Warn("join kèo lỗi", "err", err)
 	switch {
 	case errors.Is(err, ledger.ErrInsufficientBalance):
 		httpError(w, http.StatusPaymentRequired, "không đủ điểm — mua thêm ở tab Ví")
@@ -537,11 +542,12 @@ func (s *Server) listRedemptions(w http.ResponseWriter, r *http.Request, userID 
 		FROM redemptions r
 		LEFT JOIN shop_items s ON r.item_sku = s.sku
 		WHERE r.user_id = $1
-		ORDER BY r.created_at DESC`,
+		ORDER BY r.created_at DESC
+		LIMIT 100`,
 		userID,
 	)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, "query redemptions failed: "+err.Error())
+		httpError(w, http.StatusInternalServerError, "query redemptions failed")
 		return
 	}
 	defer rows.Close()

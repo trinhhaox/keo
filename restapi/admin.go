@@ -175,7 +175,8 @@ func (s *Server) adminListShopItems(w http.ResponseWriter, r *http.Request, _ in
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT id, sku, name, cost_points, stock, status, created_at
 		FROM shop_items
-		ORDER BY id DESC`)
+		ORDER BY id DESC
+		LIMIT 500`)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "query shop items failed")
 		return

@@ -41,17 +41,22 @@ func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request, userID int6
 		return
 	}
 
+	// Chặn unbounded: kèo từ thiện max_participants=0 có thể tới hàng nghìn dòng.
+	// COUNT(*) OVER() cho tổng số người tham gia thật để pot đúng kể cả khi list
+	// bị cap (pot = stake * tổng người, không phải len(entries) đã cap).
 	rows, err := s.pool.Query(ctx, `
 		SELECT e.user_id, u.display_name, e.status,
 		       COUNT(p.*)                       AS periods_total,
 		       COUNT(*) FILTER (WHERE p.passed) AS periods_passed,
-		       COALESCE(SUM(p.achieved), 0)     AS total_achieved
+		       COALESCE(SUM(p.achieved), 0)     AS total_achieved,
+		       COUNT(*) OVER()                  AS total_participants
 		FROM enrollments e
 		JOIN users u ON u.id = e.user_id
 		LEFT JOIN enrollment_periods p ON p.enrollment_id = e.id
 		WHERE e.challenge_id = $1
 		GROUP BY e.user_id, u.display_name, e.status
-		ORDER BY periods_passed DESC, total_achieved DESC, u.display_name ASC`,
+		ORDER BY periods_passed DESC, total_achieved DESC, u.display_name ASC
+		LIMIT 500`,
 		challengeID,
 	)
 	if err != nil {
@@ -70,10 +75,11 @@ func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request, userID int6
 		IsMe          bool    `json:"is_me"`
 	}
 	entries := []entry{}
+	var totalParticipants int64
 	for rows.Next() {
 		var e entry
 		if err := rows.Scan(&e.UserID, &e.DisplayName, &e.Status,
-			&e.PeriodsTotal, &e.PeriodsPassed, &e.TotalAchieved); err != nil {
+			&e.PeriodsTotal, &e.PeriodsPassed, &e.TotalAchieved, &totalParticipants); err != nil {
 			httpError(w, http.StatusInternalServerError, "scan")
 			return
 		}
@@ -82,7 +88,7 @@ func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request, userID int6
 	}
 	writeJSON(w, map[string]any{
 		"challenge": c,
-		"pot":       c.StakePoints * int64(len(entries)),
+		"pot":       c.StakePoints * totalParticipants,
 		"entries":   entries,
 	})
 }
