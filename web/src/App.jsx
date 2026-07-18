@@ -923,19 +923,36 @@ function AppCore({ userProfile, onLogout }) {
 
   const act = async (fn, okMsg, okType) => {
     setBusy(true);
-    try { await fn(); await load(); if (okMsg) showToast(okMsg, okType || detectToastType(okMsg)); }
+    try { 
+      await fn(); 
+      if (okMsg) showToast(okMsg, okType || detectToastType(okMsg)); 
+      await load(); 
+    }
     catch (e) { showToast(e.status === 402 ? "Không đủ điểm — mua thêm ở tab Ví ⭐" : `Lỗi: ${e.message}`, "error"); }
     finally { setBusy(false); }
   };
 
-  const doCheckin = () => act(async () => {
-    const res = await api.checkIn();
-    if (res.capped && res.points_granted === 0) {
-      showToast("Đã check-in — hôm nay bạn chạm trần 100 điểm thưởng/ngày rồi 💪", "info");
-    } else {
-      showToast(`Check-in thành công! +${res.points_granted} điểm vào ví ✨`, "success");
+  const doCheckin = async () => {
+    setBusy(true);
+    try {
+      const res = await api.checkIn();
+      if (res.capped && res.points_granted === 0) {
+        showToast("Đã check-in — hôm nay bạn chạm trần 100 điểm thưởng/ngày rồi 💪", "info");
+      } else {
+        showToast(`Check-in thành công! +${res.points_granted} điểm vào ví ✨`, "success");
+      }
+      // Cập nhật Optimistic ngay lập tức trên UI
+      setRewards(prev => prev ? { ...prev, checked_in_today: true, total_points: prev.total_points + res.points_granted } : prev);
+      setWallet(prev => ({ ...prev, available: prev.available + res.points_granted }));
+      
+      // Đồng bộ ngầm ở background
+      load().catch(() => null);
+    } catch (e) {
+      showToast(`Lỗi điểm danh: ${e.message}`, "error");
+    } finally {
+      setBusy(false);
     }
-  }, null);
+  };
 
   // Filter + sort challenges
   const filteredChallenges = challenges
