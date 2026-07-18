@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
@@ -15,11 +16,70 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// supabaseHTTPClient có timeout — không để một request tới GoTrue treo vô hạn
+// giữ goroutine/handler của server.
+var supabaseHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// supabaseCreds trả về (URL, anonKey) của dự án Supabase từ env (kèm fallback
+// tên biến của web).
+func supabaseCreds() (string, string) {
+	url := os.Getenv("SUPABASE_URL")
+	if url == "" {
+		url = os.Getenv("VITE_SUPABASE_URL")
+	}
+	anon := os.Getenv("SUPABASE_ANON_KEY")
+	if anon == "" {
+		anon = os.Getenv("VITE_SUPABASE_ANON_KEY")
+	}
+	return url, anon
+}
+
+// goTrueEmailConfirmed hỏi GoTrue (nguồn quyền lực DUY NHẤT) xem email của token
+// đã được xác minh thật chưa. Dùng để quyết định có được link token vào một user
+// sẵn có theo email hay không.
+//
+// KHÔNG BAO GIỜ tin claim user_metadata.email_verified: đó là raw_user_meta_data,
+// client tự ghi được qua updateUser({data}) → giả cờ verify rồi đăng ký bằng email
+// nạn nhân để hệ thống tự nối ví (account takeover).
+//
+// Fail-closed: thiếu cấu hình Supabase hoặc gọi lỗi → coi như CHƯA verify (false)
+// để không link nhầm; đăng nhập vẫn chạy (tạo user mới theo sub).
+func goTrueEmailConfirmed(ctx context.Context, tokenStr string) bool {
+	url, anon := supabaseCreds()
+	if url == "" {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", url+"/auth/v1/user", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	req.Header.Set("apikey", anon)
+	resp, err := supabaseHTTPClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return false
+	}
+	var u struct {
+		EmailConfirmedAt string `json:"email_confirmed_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+		return false
+	}
+	return u.EmailConfirmedAt != ""
+}
+
 // ValidateSupabaseJWT kiểm tra chuỗi token, nếu hợp lệ sẽ trả về internal userID.
 func ValidateSupabaseJWT(ctx context.Context, tokenStr string, secret []byte, pool *pgxpool.Pool) (int64, error) {
 	var sub, email, displayName string
 	var emailVerified bool
-	
+	// verify: xác minh email LƯỜI qua GoTrue cho đường HMAC (không tin metadata).
+	// Đường fallback API tự có email_confirmed_at nên để nil.
+	var verify func(context.Context) bool
+
 	// First try HMAC
 	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -41,8 +101,9 @@ func ValidateSupabaseJWT(ctx context.Context, tokenStr string, secret []byte, po
 			} else if name, ok := meta["name"].(string); ok {
 				displayName = name
 			}
-			emailVerified, _ = meta["email_verified"].(bool)
+			// KHÔNG đọc email_verified ở đây — client giả được. Xác minh qua GoTrue.
 		}
+		verify = func(c context.Context) bool { return goTrueEmailConfirmed(c, tokenStr) }
 	} else {
 		// Fallback to Supabase /auth/v1/user API for RS256
 		supabaseURL := os.Getenv("SUPABASE_URL")
@@ -101,7 +162,7 @@ func ValidateSupabaseJWT(ctx context.Context, tokenStr string, secret []byte, po
 		displayName = strings.Split(email, "@")[0] // Fallback
 	}
 
-	return syncSupabaseUser(ctx, pool, sub, email, displayName, emailVerified)
+	return syncSupabaseUser(ctx, pool, sub, email, displayName, emailVerified, verify)
 }
 
 // syncSupabaseUser ánh xạ danh tính Supabase (sub) → internal user id, tạo
@@ -113,8 +174,11 @@ func ValidateSupabaseJWT(ctx context.Context, tokenStr string, secret []byte, po
 //     email chưa verify là input attacker kiểm soát (đăng ký bằng email nạn
 //     nhân rồi chờ hệ thống tự nối ví).
 //   - Email chưa verify không được lưu — không cho chiếm chỗ trên UNIQUE(email).
+// verify (optional) là hàm xác minh email LƯỜI qua nguồn quyền lực (GoTrue),
+// chỉ được gọi khi thực sự có khả năng link (đường HMAC không tin metadata).
+// Đường đã có cờ tin cậy sẵn (fallback API) truyền emailVerified=true, verify=nil.
 func syncSupabaseUser(ctx context.Context, pool *pgxpool.Pool,
-	sub, email, displayName string, emailVerified bool) (int64, error) {
+	sub, email, displayName string, emailVerified bool, verify func(context.Context) bool) (int64, error) {
 	var id int64
 	err := pool.QueryRow(ctx, `SELECT id FROM users WHERE supabase_id = $1`, sub).Scan(&id)
 	if err == nil {
@@ -124,8 +188,15 @@ func syncSupabaseUser(ctx context.Context, pool *pgxpool.Pool,
 		return 0, fmt.Errorf("lookup by supabase_id: %w", err)
 	}
 
-	// User sẵn có từ kênh khác (chưa gắn Supabase) + email đã verify → link.
-	if emailVerified && email != "" {
+	// Chỉ tới đây khi first-login (sub chưa có) → xác minh email đúng lúc, tránh
+	// gọi GoTrue trên mọi request. Cờ tin cậy sẵn HOẶC xác minh lười qua verify.
+	verified := emailVerified
+	if !verified && verify != nil && email != "" {
+		verified = verify(ctx)
+	}
+
+	// User sẵn có từ kênh khác (chưa gắn Supabase) + email đã verify THẬT → link.
+	if verified && email != "" {
 		err = pool.QueryRow(ctx, `
 			UPDATE users SET supabase_id = $1
 			WHERE email = $2 AND supabase_id IS NULL
@@ -141,7 +212,7 @@ func syncSupabaseUser(ctx context.Context, pool *pgxpool.Pool,
 	// Tạo user mới. ON CONFLICT (supabase_id): hai request đầu tiên của cùng
 	// user đua nhau thì cùng hội tụ về một row.
 	var storedEmail any
-	if emailVerified && email != "" {
+	if verified && email != "" {
 		storedEmail = email
 	}
 	err = pool.QueryRow(ctx, `
@@ -207,7 +278,8 @@ func ValidateSupabaseAdminJWT(ctx context.Context, tokenStr string, secret []byt
 	var sub, email, displayName string
 	var emailVerified bool
 	var isAdmin bool
-	
+	var verify func(context.Context) bool
+
 	// First try HMAC
 	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -234,8 +306,9 @@ func ValidateSupabaseAdminJWT(ctx context.Context, tokenStr string, secret []byt
 			} else if name, ok := meta["name"].(string); ok {
 				displayName = name
 			}
-			emailVerified, _ = meta["email_verified"].(bool)
+			// KHÔNG đọc email_verified ở đây — client giả được. Xác minh qua GoTrue.
 		}
+		verify = func(c context.Context) bool { return goTrueEmailConfirmed(c, tokenStr) }
 	} else {
 		// Fallback to Supabase /auth/v1/user API for RS256
 		supabaseURL := os.Getenv("SUPABASE_URL")
@@ -300,5 +373,5 @@ func ValidateSupabaseAdminJWT(ctx context.Context, tokenStr string, secret []byt
 		displayName = strings.Split(email, "@")[0] // Fallback
 	}
 
-	return syncSupabaseUser(ctx, pool, sub, email, displayName, emailVerified)
+	return syncSupabaseUser(ctx, pool, sub, email, displayName, emailVerified, verify)
 }

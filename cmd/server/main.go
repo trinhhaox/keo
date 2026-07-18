@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -46,6 +47,20 @@ func run(log *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	devMode := os.Getenv("DEV_MODE") == "1"
+	// Prod BẮT BUỘC set các secret nhạy cảm — mọi default đều nằm công khai trong repo:
+	//   JWT_SECRET default = ai cũng forge được token → chiếm mọi ví.
+	//   SEPAY_API_KEY rỗng = webhook bỏ verify → POST giả chuyển khoản = mint điểm tự do.
+	//   TOKEN_CIPHER_KEY = KEK bọc refresh-token Strava; default toàn-0 = coi như plaintext.
+	//   STRAVA_VERIFY_TOKEN / STRAVA_CLIENT_SECRET default "dev" = webhook giả + OAuth hỏng.
+	if !devMode {
+		mustEnv("JWT_SECRET")
+		mustEnv("SEPAY_API_KEY")
+		mustEnv("TOKEN_CIPHER_KEY")
+		mustEnv("STRAVA_VERIFY_TOKEN")
+		mustEnv("STRAVA_CLIENT_SECRET")
+	}
+
 	// Đảm bảo enum goal_type hỗ trợ daily_distance_km
 	_, _ = pool.Exec(ctx, `ALTER TYPE goal_type ADD VALUE IF NOT EXISTS 'daily_distance_km'`)
 
@@ -70,6 +85,11 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("decode TOKEN_CIPHER_KEY: %w", err)
 	}
+	// Prod không được chạy với KEK toàn-0: refresh-token Strava trong DB sẽ bị
+	// "mã hóa" bằng khóa 0 = plaintext, ai đọc được DB là chiếm Strava mọi user.
+	if !devMode && isAllZero(tokenKey) {
+		return errors.New("TOKEN_CIPHER_KEY là khóa toàn-0 (mặc định DEV) — prod BẮT BUỘC đặt khóa 32-byte ngẫu nhiên")
+	}
 	localKMS, err := ingest.NewLocalKMS(tokenKey)
 	if err != nil {
 		return fmt.Errorf("local KMS: %w", err)
@@ -82,16 +102,7 @@ func run(log *slog.Logger) error {
 		ClientSecret: envOr("STRAVA_CLIENT_SECRET", "dev"),
 	}
 
-	devMode := os.Getenv("DEV_MODE") == "1"
-
 	// ===== Middlewares =====
-	// Ngoài DEV_MODE, secret bắt buộc từ env: JWT_SECRET default nằm công khai
-	// trong repo (forge token = chiếm mọi ví), SEPAY_API_KEY rỗng làm webhook
-	// bỏ verify (POST giả chuyển khoản = mint điểm tự do).
-	if !devMode {
-		mustEnv("JWT_SECRET")
-		mustEnv("SEPAY_API_KEY")
-	}
 	jwtSecret := []byte(envOr("JWT_SECRET", "dev-jwt-secret-do-not-use-in-prod"))
 	authUserID := restapi.AuthMiddleware(jwtSecret, pool)
 	
@@ -128,7 +139,8 @@ func run(log *slog.Logger) error {
 	apiSrv.Routes(mux)
 	
 	paySvc.Routes(mux, authUserID)
-	ingestMux := ingest.NewMux(pool, healthSvc, envOr("STRAVA_VERIFY_TOKEN", "dev-verify"), authUserID, stravaWorker)
+	stravaSubID, _ := strconv.ParseInt(os.Getenv("STRAVA_SUBSCRIPTION_ID"), 10, 64)
+	ingestMux := ingest.NewMux(pool, healthSvc, envOr("STRAVA_VERIFY_TOKEN", "dev-verify"), stravaSubID, authUserID, stravaWorker)
 	mux.Handle("/webhooks/", ingestMux)
 	mux.Handle("/v1/health-sync", ingestMux)
 
@@ -249,7 +261,20 @@ func run(log *slog.Logger) error {
 		log.Info("serving web UI", "dist", dist)
 	}
 
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// H7: chặn body khổng lồ (DoS cạn RAM) cho MỌI endpoint tại một chỗ. Webhook/
+	// health-sync đã tự LimitReader 1MiB nên trần 2MiB ở đây trong suốt với chúng.
+	handler := maxBodyBytes(mux, 2<<20)
+
+	// H1: đủ bộ timeout — ReadHeaderTimeout đơn lẻ không chặn slow-loris ở body,
+	// request treo giữ goroutine vô hạn, và ghi response không có trần thời gian.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -283,4 +308,22 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// maxBodyBytes bọc mọi request để giới hạn kích thước body — vượt trần thì lần
+// đọc tiếp theo trả lỗi, handler tự trả 400. GET/không body: no-op.
+func maxBodyBytes(next http.Handler, n int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, n)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isAllZero(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }

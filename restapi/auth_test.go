@@ -23,14 +23,14 @@ func TestIntegrationSupabaseUserSync(t *testing.T) {
 	emailVictim := fmt.Sprintf("victim-%d@keo.test", tag)
 
 	// Nạn nhân: user đã gắn Supabase, có email verified.
-	victimID, err := syncSupabaseUser(ctx, pool, uuid(1), emailVictim, "Victim", true)
+	victimID, err := syncSupabaseUser(ctx, pool, uuid(1), emailVictim, "Victim", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// 1. Attacker sub khác, CÙNG email nhưng chưa verify → không được đụng
 	// vào user nạn nhân, tạo user mới (email không lưu).
-	attackerID, err := syncSupabaseUser(ctx, pool, uuid(2), emailVictim, "Attacker", false)
+	attackerID, err := syncSupabaseUser(ctx, pool, uuid(2), emailVictim, "Attacker", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestIntegrationSupabaseUserSync(t *testing.T) {
 
 	// 2. Attacker sub khác nữa, cùng email ĐÃ verify — nhưng email đã thuộc
 	// user gắn Supabase khác → vẫn không cướp, tạo user mới.
-	attacker2ID, err := syncSupabaseUser(ctx, pool, uuid(3), emailVictim, "Attacker2", true)
+	attacker2ID, err := syncSupabaseUser(ctx, pool, uuid(3), emailVictim, "Attacker2", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestIntegrationSupabaseUserSync(t *testing.T) {
 	}
 
 	// Nạn nhân đăng nhập lại → vẫn về đúng row cũ, supabase_id không bị đè.
-	again, err := syncSupabaseUser(ctx, pool, uuid(1), emailVictim, "Victim", true)
+	again, err := syncSupabaseUser(ctx, pool, uuid(1), emailVictim, "Victim", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestIntegrationSupabaseUserSync(t *testing.T) {
 	).Scan(&legacyID); err != nil {
 		t.Fatal(err)
 	}
-	linked, err := syncSupabaseUser(ctx, pool, uuid(4), emailLegacy, "Legacy", true)
+	linked, err := syncSupabaseUser(ctx, pool, uuid(4), emailLegacy, "Legacy", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestIntegrationSupabaseUserSync(t *testing.T) {
 	// 4. Email rỗng (login Zalo/phone qua Supabase) → tạo user bình thường,
 	// nhiều user không email không va nhau trên UNIQUE(email).
 	for i := 5; i <= 6; i++ {
-		if _, err := syncSupabaseUser(ctx, pool, uuid(i), "", "NoEmail", false); err != nil {
+		if _, err := syncSupabaseUser(ctx, pool, uuid(i), "", "NoEmail", false, nil); err != nil {
 			t.Fatalf("user không email thứ %d: %v", i-4, err)
 		}
 	}

@@ -99,7 +99,7 @@ func (s *HealthSyncService) Sync(ctx context.Context, userID int64, source, atte
 // ===== HTTP wiring =====
 
 // NewMux gắn các handler: webhook Strava validation + event ingest, và Fit sync.
-func NewMux(pool *pgxpool.Pool, health *HealthSyncService, stravaVerifyToken string, authUserID func(*http.Request) (int64, error), worker *StravaWorker) *http.ServeMux {
+func NewMux(pool *pgxpool.Pool, health *HealthSyncService, stravaVerifyToken string, stravaSubscriptionID int64, authUserID func(*http.Request) (int64, error), worker *StravaWorker) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Strava validation handshake: GET với hub.challenge phải echo lại.
@@ -122,7 +122,22 @@ func NewMux(pool *pgxpool.Pool, health *HealthSyncService, stravaVerifyToken str
 			http.Error(w, "read body", http.StatusBadRequest)
 			return
 		}
-		
+
+		// Strava KHÔNG ký payload → event có thể bị forge (giả owner_id nạn nhân +
+		// aspect_type=delete để xóa hoạt động, đánh rớt kèo). subscription_id do
+		// Strava sinh lúc tạo subscription, chỉ server biết → dùng làm shared-secret.
+		// Bỏ qua khi chưa cấu hình (dev). Trả 200 khi lệch để không lộ tín hiệu dò.
+		if stravaSubscriptionID != 0 {
+			var probe struct {
+				SubscriptionID int64 `json:"subscription_id"`
+			}
+			if json.Unmarshal(payload, &probe) != nil || probe.SubscriptionID != stravaSubscriptionID {
+				slog.Warn("strava webhook rejected: subscription_id mismatch", "got", probe.SubscriptionID)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+
 		slog.Info("received strava webhook payload", "payload", string(payload))
 
 		if err := EnqueueStravaEvent(r.Context(), pool, payload); err != nil {

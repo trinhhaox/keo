@@ -575,10 +575,13 @@ func (s *Server) listRedemptions(w http.ResponseWriter, r *http.Request, userID 
 
 // charitiesStats trả về số dư (tổng đóng góp) của các quỹ từ thiện
 func (s *Server) charitiesStats(w http.ResponseWriter, r *http.Request, userID int64) {
+	// balance nằm ở bảng account_balances, KHÔNG phải cột của ledger_accounts —
+	// phải LEFT JOIN (quỹ chưa nhận đồng nào thì chưa có row balance → COALESCE 0).
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT user_id, COALESCE(balance, 0)
-		FROM ledger_accounts
-		WHERE user_id IN (1001, 1002, 1003) AND type = 'user_available'
+		SELECT a.user_id, COALESCE(b.balance, 0)
+		FROM ledger_accounts a
+		LEFT JOIN account_balances b ON b.account_id = a.id
+		WHERE a.user_id IN (1001, 1002, 1003) AND a.type = 'user_available'
 	`)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "query failed: "+err.Error())

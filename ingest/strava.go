@@ -15,11 +15,12 @@ import (
 // StravaEvent là payload webhook của Strava (một event = một thay đổi).
 // https://developers.strava.com/docs/webhooks/
 type StravaEvent struct {
-	ObjectType string `json:"object_type"` // "activity" | "athlete"
-	ObjectID   int64  `json:"object_id"`
-	AspectType string `json:"aspect_type"` // "create" | "update" | "delete"
-	OwnerID    int64  `json:"owner_id"`    // athlete_id
-	EventTime  int64  `json:"event_time"`
+	ObjectType     string `json:"object_type"` // "activity" | "athlete"
+	ObjectID       int64  `json:"object_id"`
+	AspectType     string `json:"aspect_type"` // "create" | "update" | "delete"
+	OwnerID        int64  `json:"owner_id"`    // athlete_id
+	EventTime      int64  `json:"event_time"`
+	SubscriptionID int64  `json:"subscription_id"` // của subscription do chính app tạo
 }
 
 // EnqueueStravaEvent là toàn bộ việc webhook handler làm: parse tối thiểu,

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -156,7 +157,8 @@ func initApp() {
 	settleJob = challenge.NewSettlementJob(challengeStore, log)
 
 	paySvc.Routes(mux, authUserID)
-	ingestMux := ingest.NewMux(pool, healthSvc, envOr("STRAVA_VERIFY_TOKEN", "dev-verify"), authUserID, stravaWorker)
+	stravaSubID, _ := strconv.ParseInt(os.Getenv("STRAVA_SUBSCRIPTION_ID"), 10, 64)
+	ingestMux := ingest.NewMux(pool, healthSvc, envOr("STRAVA_VERIFY_TOKEN", "dev-verify"), stravaSubID, authUserID, stravaWorker)
 	mux.Handle("/webhooks/", ingestMux)
 	mux.Handle("/v1/health-sync", ingestMux)
 
