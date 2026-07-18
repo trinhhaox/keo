@@ -36,7 +36,7 @@ func EnqueueStravaEvent(ctx context.Context, pool *pgxpool.Pool, payload []byte)
 		INSERT INTO webhook_inbox (provider, dedup_key, payload)
 		VALUES ('strava', $1, $2)
 		ON CONFLICT (provider, dedup_key) DO NOTHING`,
-		dedup, payload,
+		dedup, string(payload),
 	)
 	if err != nil {
 		return fmt.Errorf("enqueue: %w", err)

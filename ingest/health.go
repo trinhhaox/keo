@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -117,22 +118,35 @@ func NewMux(pool *pgxpool.Pool, health *HealthSyncService, stravaVerifyToken str
 	mux.HandleFunc("POST /webhooks/strava", func(w http.ResponseWriter, r *http.Request) {
 		payload, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
+			slog.Error("read webhook body failed", "err", err)
 			http.Error(w, "read body", http.StatusBadRequest)
 			return
 		}
+		
+		slog.Info("received strava webhook payload", "payload", string(payload))
+
 		if err := EnqueueStravaEvent(r.Context(), pool, payload); err != nil {
+			slog.Error("enqueue strava event failed", "err", err, "payload", string(payload))
 			// 5xx để Strava retry — event không được phép mất.
 			http.Error(w, "enqueue failed", http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 
+		slog.Info("strava webhook enqueued successfully")
+
 		// Xử lý tức thì (bất đồng bộ) sự kiện vừa enqueue
 		if worker != nil {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				worker.ProcessOnce(ctx)
+				slog.Info("triggering real-time process for strava event")
+				n, err := worker.ProcessOnce(ctx)
+				if err != nil {
+					slog.Error("real-time strava process failed", "err", err)
+				} else {
+					slog.Info("real-time strava process completed", "processed", n)
+				}
 			}()
 		}
 	})
