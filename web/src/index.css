@@ -6,6 +6,19 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Tôn trọng người dùng bật "giảm chuyển động" (a11y): tắt mọi animation lặp
+   (shine, stripes, pulse, shimmer...) và rút ngắn transition. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Kính mờ (Glassmorphism) */
 .glass-panel {
   background: rgba(27, 31, 39, 0.7);

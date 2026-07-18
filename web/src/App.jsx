@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef, lazy, Suspense, memo } from "react";
 import { Flame, Target, ShoppingBag, Wallet, Trophy, Gift, Ticket, Medal, Mountain, Footprints, User, LogOut, ChevronRight, Share2, Sparkles, RefreshCw, SlidersHorizontal, TrendingUp, Users, Heart } from "lucide-react";
 import * as api from "./api.js";
 import { T, MONO, SPORTS, SOURCES, GOALS, CHARITIES, fmtP, daysLeft } from "./theme.js";
 import LeaderboardSheet from "./leaderboard-sheet.jsx";
 import { StreakCard, ActivityFeed } from "./activity-feed.jsx";
 import { NotificationToast, detectToastType } from "./notification.jsx";
-import AdminDashboard from "./admin-dashboard.jsx";
+const AdminDashboard = lazy(() => import("./admin-dashboard.jsx"));
 
 const SKU_ICONS = { "soap-sinh-duoc": Sparkles, "voucher-sport-500k": Ticket, "gear-trail-shoes": Footprints, "ticket-hn-marathon": Medal, "ticket-sg-night-run": Mountain };
 // Tỷ giá 1 điểm = 1 VNĐ.
@@ -35,6 +35,13 @@ function useAnimatedNumber(target, duration = 800) {
   }, [target, duration]);
   return display;
 }
+
+// Số điểm có hiệu ứng đếm — TÁCH thành component riêng (memo) để requestAnimationFrame
+// chỉ re-render chính nó ~mỗi frame, không kéo re-render toàn bộ AppCore + list kèo.
+const AnimatedPoints = memo(function AnimatedPoints({ value, duration = 900 }) {
+  const n = useAnimatedNumber(value, duration);
+  return <>{n.toLocaleString("vi-VN")}</>;
+});
 
 // ===== Skeleton Card =====
 function SkeletonChallengeCard() {
@@ -269,7 +276,9 @@ const SportChip = ({ active, onClick, children }) => (
 );
 
 // ===== Thẻ kèo (phiếu cược) =====
-function ChallengeCard({ c, onJoin, onBoard, onShare }) {
+// memo: props (c + handler ổn định) không đổi thì không re-render dù AppCore đổi
+// state khác (toast/busy...).
+const ChallengeCard = memo(function ChallengeCard({ c, onJoin, onBoard, onShare }) {
   const sport = SPORTS[c.sport] || { icon: Trophy };
   const Icon = sport.icon;
   const pot = c.stake_points * c.participants;
@@ -331,7 +340,7 @@ function ChallengeCard({ c, onJoin, onBoard, onShare }) {
       </div>
     </div>
   );
-}
+});
 
 // Helper phân tích tiến độ trả về câu "Cà khịa" hoặc "Động viên" tự động
 function getBanterMessage(c, pct, settled, won) {
@@ -610,6 +619,14 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
   const enough = wallet?.available >= stake;
   const days = Math.max(1, Math.ceil((new Date(endAt) - new Date(startAt)) / 86400000));
 
+  // Validation client: mục tiêu > 0, số người là số nguyên ≥ 0 (0 = không giới hạn).
+  const goalNum = Number(goal);
+  const maxNum = Number(maxParticipants);
+  const invalidMsg =
+    !(goalNum > 0) ? "Mục tiêu phải lớn hơn 0."
+    : !(Number.isInteger(maxNum) && maxNum >= 0) ? "Số người tối đa phải là số nguyên ≥ 0 (0 = không giới hạn)."
+    : "";
+
   const pickSport = (k) => {
     setSport(k);
     const gt = Object.entries(GOALS).find(([, v]) => v.sports.includes(k));
@@ -656,13 +673,13 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div>
             <Label>Mục tiêu ({GOALS[goalType]?.label || "đơn vị"})</Label>
-            <input type="number" value={goal} onChange={(e) => setGoal(+e.target.value)}
+            <input type="number" inputMode="numeric" min="1" value={goal} onChange={(e) => setGoal(+e.target.value)}
               className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
               style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
           </div>
           <div>
             <Label>Tối đa (người)</Label>
-            <input type="number" value={maxParticipants} onChange={(e) => setMaxParticipants(+e.target.value)}
+            <input type="number" inputMode="numeric" min="0" value={maxParticipants} onChange={(e) => setMaxParticipants(+e.target.value)}
               className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
               style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
           </div>
@@ -771,18 +788,24 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
           </div>
         </div>
 
+        {invalidMsg && (
+          <div className="text-xs font-semibold mb-3 px-3 py-2 rounded-lg" role="alert" aria-live="polite"
+            style={{ background: "rgba(255,59,48,0.1)", color: T.red, border: `1px solid ${T.red}33` }}>
+            {invalidMsg}
+          </div>
+        )}
         {enough ? (
-          <button disabled={busy}
+          <button disabled={busy || !!invalidMsg}
             onClick={() => onCreate({
-              title: `${SPORTS[sport].label} ${goal.toLocaleString("vi-VN")} ${GOALS[goalType]?.label || ""}`,
-              sport, goal_type: goalType, goal_value: goal, source,
-              stake_points: stake, duration_days: days, max_participants: maxParticipants,
+              title: `${SPORTS[sport].label} ${goalNum.toLocaleString("vi-VN")} ${GOALS[goalType]?.label || ""}`,
+              sport, goal_type: goalType, goal_value: goalNum, source,
+              stake_points: stake, duration_days: days, max_participants: maxNum,
               start_at: startAt,
               is_charity: isCharity,
               charity_id: isCharity ? charityId : 0,
             })}
             className="w-full py-3.5 rounded-2xl font-bold text-[15px] active:scale-[.98] transition-transform"
-            style={{ background: T.brand, color: T.bg, opacity: busy ? 0.6 : 1 }}>
+            style={{ background: T.brand, color: T.bg, opacity: busy || invalidMsg ? 0.5 : 1 }}>
             {busy ? "Đang tạo..." : `Tạo kèo · cược ${fmtP(stake)}`}
           </button>
         ) : (
@@ -857,20 +880,18 @@ function AppCore({ userProfile, onLogout }) {
   const [sportFilter, setSportFilter] = useState(null);
   const [sortKey, setSortKey] = useState("default");
 
-  // Animated wallet counter
-  const animatedWallet = useAnimatedNumber(wallet.available, 900);
-
-  const showToast = (msg, type) => {
+  // useCallback để tham chiếu ổn định → ChallengeCard (memo) không re-render thừa.
+  const showToast = useCallback((msg, type) => {
     const detectedType = type || detectToastType(msg);
     setToast({ msg, type: detectedType });
-  };
+  }, []);
 
-  const handleShare = (challengeID, title) => {
+  const handleShare = useCallback((challengeID, title) => {
     const inviteLink = `${window.location.origin}/?join=${challengeID}`;
     navigator.clipboard.writeText(inviteLink)
       .then(() => showToast(`Đã sao chép link mời tham gia kèo "${title}"! 🚀`, "success"))
       .catch(() => showToast("Không thể sao chép link", "error"));
-  };
+  }, [showToast]);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -924,7 +945,8 @@ function AppCore({ userProfile, onLogout }) {
   const switchTab = (k) => {
     setTab(k);
     setTabKey(prev => prev + 1);
-    load();
+    // KHÔNG reload toàn bộ 10 API mỗi lần chạm tab — data đã fresh từ mount, sau
+    // mỗi hành động (act/checkin) và nút refresh. Chuyển tab giờ tức thì.
   };
 
   // ===== Nút back cứng (webview Zalo Mini App) =====
@@ -1011,16 +1033,16 @@ function AppCore({ userProfile, onLogout }) {
               <button
                 onClick={() => load(true)}
                 disabled={refreshing}
-                className="p-2.5 rounded-xl transition-all active:scale-95 hover:bg-white/5"
-                style={{ background: T.card, border: `1px solid ${T.line}`, color: refreshing ? T.brand : T.textDim }}
-                title="Tải lại dữ liệu"
+                className="rounded-xl transition-all active:scale-95 hover:bg-white/5 flex items-center justify-center"
+                style={{ background: T.card, border: `1px solid ${T.line}`, color: refreshing ? T.brand : T.textDim, minWidth: 44, minHeight: 44 }}
+                title="Tải lại dữ liệu" aria-label="Tải lại dữ liệu"
               >
-                <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
+                <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
               </button>
               {/* Wallet */}
               <button onClick={() => switchTab("wallet")} className="text-right rounded-2xl px-4 py-2.5 transition-transform active:scale-95" style={{ background: T.card, border: `1px solid ${T.line}` }}>
                 <div className="text-[10px] uppercase tracking-widest font-bold mb-0.5" style={{ color: T.textDim }}>Ví điểm</div>
-                <div className="text-[15px] font-bold text-glow" style={{ ...MONO, color: T.brand }}>{animatedWallet.toLocaleString("vi-VN")} ⭐</div>
+                <div className="text-[15px] font-bold text-glow" style={{ ...MONO, color: T.brand }}><AnimatedPoints value={wallet.available} /> ⭐</div>
               </button>
             </div>
           </div>
@@ -1211,7 +1233,7 @@ function AppCore({ userProfile, onLogout }) {
                   <div className="flex justify-between mb-2">
                     <div>
                       <div className="text-[11px] uppercase tracking-widest font-bold mb-1" style={{ color: T.textDim }}>Khả dụng</div>
-                      <div className="text-3xl font-black text-glow" style={{ ...MONO, color: T.brand }}>{animatedWallet.toLocaleString("vi-VN")} điểm</div>
+                      <div className="text-3xl font-black text-glow" style={{ ...MONO, color: T.brand }}><AnimatedPoints value={wallet.available} /> điểm</div>
                     </div>
                     <div className="text-right">
                       <div className="text-[11px] uppercase tracking-widest font-bold mb-1" style={{ color: T.textDim }}>Đang khóa cược 🔒</div>
@@ -1297,7 +1319,7 @@ function AppCore({ userProfile, onLogout }) {
                 {/* Thống kê nhanh */}
                 <div className="grid grid-cols-3 gap-3 mb-5">
                   <div className="rounded-2xl p-3 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-                    <div className="text-lg font-bold" style={{ ...MONO, color: T.brand }}>{animatedWallet.toLocaleString('vi-VN')}</div>
+                    <div className="text-lg font-bold" style={{ ...MONO, color: T.brand }}><AnimatedPoints value={wallet.available} /></div>
                     <div className="text-[10px] uppercase tracking-widest font-bold mt-1" style={{ color: T.textDim }}>Điểm</div>
                   </div>
                   <div className="rounded-2xl p-3 text-center" style={{ background: T.card, border: `1px solid ${T.line}` }}>
@@ -1348,7 +1370,9 @@ function AppCore({ userProfile, onLogout }) {
 
             {tab === "admin" && isAdmin && (
               <div key={tabKey} className="pb-8 fade-in-up">
-                <AdminDashboard showToast={showToast} />
+                <Suspense fallback={<div className="text-center py-10 text-sm" style={{ color: T.textDim }}>Đang tải trang quản trị…</div>}>
+                  <AdminDashboard showToast={showToast} />
+                </Suspense>
               </div>
             )}
           </div>

@@ -44,10 +44,12 @@ export function NotificationToast({ msg, type = "info", duration = 2600, onDone 
 
   return (
     <div
+      role={type === "error" ? "alert" : "status"}
+      aria-live={type === "error" ? "assertive" : "polite"}
       className={leaving ? "slide-up-out" : "slide-down"}
       style={{
         position: "absolute",
-        top: 96,
+        top: "calc(96px + env(safe-area-inset-top))",
         left: 24,
         right: 24,
         zIndex: 60,
@@ -69,10 +71,11 @@ export function NotificationToast({ msg, type = "info", duration = 2600, onDone 
         </div>
         <button
           onClick={() => { setLeaving(true); setTimeout(() => onDone?.(), 220); }}
-          className="shrink-0 p-0.5 rounded-full transition-opacity hover:opacity-70"
-          style={{ color: T.textDim }}
+          aria-label="Đóng thông báo"
+          className="shrink-0 -m-2 p-2 rounded-full transition-opacity hover:opacity-70 flex items-center justify-center"
+          style={{ color: T.textDim, minWidth: 40, minHeight: 40 }}
         >
-          <X size={14} />
+          <X size={16} />
         </button>
       </div>
 
