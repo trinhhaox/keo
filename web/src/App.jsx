@@ -531,7 +531,7 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="grid grid-cols-1 gap-3.5 mb-4">
           <div>
             <Label>Ngày bắt đầu</Label>
             <input type="date" value={startAt} onChange={(e) => handleStartAtChange(e.target.value)}
