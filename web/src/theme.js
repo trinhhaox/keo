@@ -36,5 +36,6 @@ export const daysLeft = (endAt) => Math.max(0, Math.ceil((new Date(endAt) - Date
 
 export const CHARITIES = {
   1001: { name: "Quỹ Phẫu Thuật Nụ Cười", desc: "Operation Smile - Phẫu thuật hàm ếch miễn phí cho trẻ em.", color: "#FF3366", logo: "👄" },
-  1002: { name: "Quỹ Gieo Mầm Xanh", desc: "Trồng rừng phòng hộ và phủ xanh các khu bảo tồn thiên nhiên.", color: "#33CC66", logo: "🌳" }
+  1002: { name: "Quỹ Gieo Mầm Xanh", desc: "Trồng rừng phòng hộ và phủ xanh các khu bảo tồn thiên nhiên.", color: "#33CC66", logo: "🌳" },
+  1003: { name: "Quỹ Run Organic", desc: "Phát triển nông nghiệp hữu cơ và lối sống thể thao bền vững.", color: "#A8E6CF", logo: "🌱" }
 };

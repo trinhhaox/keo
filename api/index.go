@@ -88,7 +88,8 @@ func initApp() {
 		INSERT INTO users (id, email, display_name, password_hash, created_at)
 		VALUES 
 			(1001, 'charity.smile@keo.vn', 'Quỹ Phẫu Thuật Nụ Cười', '', now()),
-			(1002, 'charity.forest@keo.vn', 'Quỹ Trồng Rừng Gieo Mầm Xanh', '', now())
+			(1002, 'charity.forest@keo.vn', 'Quỹ Trồng Rừng Gieo Mầm Xanh', '', now()),
+			(1003, 'charity.organic@keo.vn', 'Quỹ Run Organic', '', now())
 		ON CONFLICT (id) DO NOTHING
 	`)
 

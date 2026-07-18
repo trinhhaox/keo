@@ -727,7 +727,7 @@ function AppCore({ userProfile, onLogout }) {
   const [redeemConfirm, setRedeemConfirm] = useState(null);
   const [deliveryForm, setDeliveryForm] = useState(null);
   const [redemptions, setRedemptions] = useState([]);
-  const [charityStats, setCharityStats] = useState({ "1001": 0, "1002": 0 });
+  const [charityStats, setCharityStats] = useState({ "1001": 0, "1002": 0, "1003": 0 });
 
   // Filter/Sort state
   const [sportFilter, setSportFilter] = useState(null);
@@ -939,16 +939,19 @@ function AppCore({ userProfile, onLogout }) {
                 <div className="rounded-3xl p-5 mb-6 text-left relative overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
                   <div className="flex items-center gap-2 mb-3">
                     <Heart size={16} className="animate-pulse" style={{ color: T.red }} />
-                    <div className="text-xs font-bold uppercase tracking-wider" style={{ color: T.text }}>🎗️ Quỹ Cộng Đồng Kèo</div>
+                    <div className="text-xs font-bold uppercase tracking-wider" style={{ color: T.text }}>🎗️ Quỹ Cộng Đồng</div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-2">
                     {Object.entries(CHARITIES).map(([k, v]) => (
-                      <div key={k} className="p-3 rounded-2xl" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
-                        <div className="flex items-center gap-1.5 mb-1.5">
-                          <span className="text-base">{v.logo}</span>
-                          <div className="text-[10px] font-bold truncate" style={{ color: T.textDim }} title={v.name}>{v.name}</div>
+                      <div key={k} className="flex items-center justify-between p-3 rounded-2xl" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="text-lg shrink-0">{v.logo}</span>
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold truncate" style={{ color: T.text }} title={v.name}>{v.name}</div>
+                            <div className="text-[9px] truncate" style={{ color: T.textDim }} title={v.desc}>{v.desc}</div>
+                          </div>
                         </div>
-                        <div className="text-xs font-black text-glow" style={{ ...MONO, color: v.color }}>
+                        <div className="text-xs font-black text-glow shrink-0 ml-3" style={{ ...MONO, color: v.color }}>
                           {Number(charityStats[k] || 0).toLocaleString("vi-VN")} pts
                         </div>
                       </div>

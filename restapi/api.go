@@ -578,7 +578,7 @@ func (s *Server) charitiesStats(w http.ResponseWriter, r *http.Request, userID i
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT user_id, COALESCE(balance, 0)
 		FROM ledger_accounts
-		WHERE user_id IN (1001, 1002) AND type = 'user_available'
+		WHERE user_id IN (1001, 1002, 1003) AND type = 'user_available'
 	`)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "query failed: "+err.Error())
@@ -589,6 +589,7 @@ func (s *Server) charitiesStats(w http.ResponseWriter, r *http.Request, userID i
 	out := map[string]int64{
 		"1001": 0,
 		"1002": 0,
+		"1003": 0,
 	}
 
 	for rows.Next() {
