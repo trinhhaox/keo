@@ -221,6 +221,13 @@ func initApp() {
 		ctx, cancel := context.WithTimeout(r.Context(), 9*time.Second)
 		defer cancel()
 		
+		// Tự phục hồi: Tự động requeue các event failed trước đó để xử lý lại
+		_, _ = pool.Exec(ctx, `
+			UPDATE webhook_inbox 
+			SET status = 'pending', error = '' 
+			WHERE provider = 'strava' AND status = 'failed'
+		`)
+
 		processed := 0
 		for {
 			n, err := stravaWorker.ProcessOnce(ctx)
