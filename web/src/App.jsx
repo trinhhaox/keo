@@ -86,7 +86,7 @@ function SourceBadge({ source }) {
   const isStrava = source === "strava";
   return <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full"
     style={{ background: isStrava ? "rgba(252, 76, 2, 0.1)" : T.bg, color: isStrava ? T.strava : T.textDim, border: `1px solid ${isStrava ? "rgba(252, 76, 2, 0.2)" : T.line}` }}>
-    <Icon size={12} strokeWidth={2.5} /> {s.label}{isStrava ? " · webhook ⚡" : ""}
+    <Icon size={12} strokeWidth={2.5} /> {s.label}{isStrava ? " · tự động ⚡" : ""}
   </span>;
 }
 
@@ -364,7 +364,7 @@ function MyChallengeCard({ c, onSync, busy, onBoard, onShare }) {
 
       {!settled && (c.source === "strava" ? (
         <div className="rounded-xl px-3 py-2.5 mb-3 text-[11px] font-semibold" style={{ background: "#FEEDE5", color: T.strava }}>
-          ⚡ Hoạt động Strava tự đẩy về qua webhook — không cần đồng bộ tay
+          ⚡ Hoạt động Strava được đồng bộ tự động — không cần thao tác thủ công
         </div>
       ) : (
         <div className="flex items-center justify-between rounded-xl px-3 py-2.5 mb-3" style={{ background: T.card }}>
