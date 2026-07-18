@@ -333,6 +333,105 @@ function ChallengeCard({ c, onJoin, onBoard, onShare }) {
   );
 }
 
+// Helper phân tích tiến độ trả về câu "Cà khịa" hoặc "Động viên" tự động
+function getBanterMessage(c, pct, settled, won) {
+  const sport = c.sport;
+  
+  if (settled) {
+    if (won) {
+      return {
+        avatar: "👑",
+        sender: "Chiến Thần Về Đích",
+        text: "Quá đẳng cấp! Bạn đã xuất sắc hoàn thành mục tiêu. Tiền cược đã được hoàn trả an toàn cùng phần thưởng!",
+        color: T.green,
+        bg: "rgba(103, 194, 58, 0.08)"
+      };
+    } else {
+      if (c.is_charity) {
+        return {
+          avatar: "🎗️",
+          sender: "Đại Sứ Nhân Ái",
+          text: "Dù không về đích nhưng điểm cược của bạn đã được gửi tặng trọn vẹn tới quỹ từ thiện. Cảm ơn tấm lòng của bạn!",
+          color: "#FF3366",
+          bg: "rgba(255, 51, 102, 0.08)"
+        };
+      } else {
+        return {
+          avatar: "💸",
+          sender: "Nhà Tài Trợ Bất Đắc Dĩ",
+          text: "Điểm cược đã được chia đều cho những người chiến thắng. Coi như đóng học phí, lần sau phục thù nhé!",
+          color: T.red,
+          bg: "rgba(245, 108, 108, 0.08)"
+        };
+      }
+    }
+  }
+
+  const daysPassed = Math.max(0, Math.ceil((Date.now() - new Date(c.start_at)) / 86400000));
+  const totalDays = Math.max(1, Math.ceil((new Date(c.end_at) - new Date(c.start_at)) / 86400000));
+  const timeRatio = Math.min(1, daysPassed / totalDays);
+  const isLazy = pct < (timeRatio * 80);
+
+  if (pct >= 80) {
+    return {
+      avatar: "🦁",
+      sender: "Sư Tử Đầu Đàn",
+      text: "Tuyệt vời! Bạn đã chính thức cán mốc an toàn. Giờ chỉ cần ngồi rung đùi đợi chia quỹ cược từ hội lười biếng thôi!",
+      color: T.brand,
+      bg: "rgba(204, 255, 0, 0.08)"
+    };
+  }
+
+  if (pct === 0) {
+    const msgs = {
+      run: `Báo động đỏ! Kèo chạy đã bắt đầu nhưng bạn vẫn chưa nhúc nhích? Bạn định quyên góp điểm cược cho mọi người tiêu hộ à? 🏃💨`,
+      bike: `Xe đạp để ngắm chứ không đạp à? Đạp ngay vài km cứu cược đi nào, xích sắp rỉ sét hết rồi! 🚴`,
+      swim: `Kèo bơi mà nằm trên bờ tắm nắng là dở rồi! Nhảy xuống nước sải vài vòng cứu ví tiền đi chứ! 🏊`,
+      walk: `Đi bộ dưỡng sinh hay sao mà vẫn 0 bước thế kia? Nhấc mông lên đi dạo vài vòng đi nào! 🚶`,
+      gym: `Tạ để ngắm hay để nâng thế bạn hiền? Đến phòng gym tập ngay một buổi để kích hoạt cược đi! 🏋️`
+    };
+    return {
+      avatar: "😈",
+      sender: "Quỷ Cà Khịa",
+      text: msgs[sport] || "Kèo đã lên mà tiến độ vẫn là số 0 tròn trĩnh? Xách giày lên tập ngay trước khi cược bay màu!",
+      color: T.red,
+      bg: "rgba(255, 59, 48, 0.08)"
+    };
+  }
+
+  if (isLazy) {
+    const msgs = {
+      run: `Tốc độ rùa bò này thì quỹ người thắng đang cười rất tươi đấy! Xỏ giày vào chạy nhanh lên nào! 🐢`,
+      bike: `Đạp xe thong dong quá bạn ơi! Tăng tốc tua chân lên kẻo cược trôi về túi người khác bây giờ! 🚴⚡`,
+      swim: `Bơi lội kiểu này chắc sắp uống nước hồ bơi thay cơm rồi. Sải tay mạnh mẽ lên cứu cược nào! 🏊💦`,
+      walk: `Đi bộ kiểu này sên bò còn nhanh hơn! Đi nhanh chân lên chút nữa bạn ơi! 🐌`,
+      gym: `Nửa buổi tập mà cơ bắp chưa nóng cược đã sắp nguội rồi! Tập trung nâng tạ lên nào! 🏋️💪`
+    };
+    return {
+      avatar: "🐔",
+      sender: "Gà Trống Gọi Dậy",
+      text: msgs[sport] || "Tiến độ đang chậm hơn thời gian trôi qua. Chăm chỉ tập luyện lên kẻo mất cược đáng tiếc nhé!",
+      color: "#E6A23C",
+      bg: "rgba(230, 162, 60, 0.08)"
+    };
+  }
+
+  const msgs = {
+    run: `Chạy quá cừ! Strava đang rực lửa vì những bước chạy của bạn đấy. Giữ vững phong độ nhé! 🔥`,
+    bike: `Tua chân quá dẻo! Cảm giác như Tour de France đang vẫy gọi bạn vậy. Tiếp tục duy trì nhé! 🚴🌟`,
+    swim: `Kình ngư tương lai đây rồi! Tốc độ bơi quá ấn tượng, bảo vệ cược xuất sắc! 🏊👑`,
+    walk: `Mỗi bước chân là một dặm đường. Bạn đang đi rất đúng tiến độ, cố lên! 🚶👣`,
+    gym: `Gymer thực thụ! Cơ bắp cuồn cuộn đi kèm với điểm cược an toàn. Quá uy tín! 🏋️✨`
+  };
+  return {
+    avatar: "🦄",
+    sender: "Kỳ Lân Động Viên",
+    text: msgs[sport] || "Tiến độ rất tốt và an toàn! Hãy tiếp tục duy trì để về đích rực rỡ!",
+    color: T.green,
+    bg: "rgba(103, 194, 58, 0.08)"
+  };
+}
+
 // ===== Kèo của tôi =====
 function MyChallengeCard({ c, onSync, busy, onBoard, onShare }) {
   const sport = SPORTS[c.sport] || { icon: Trophy };
@@ -401,9 +500,32 @@ function MyChallengeCard({ c, onSync, busy, onBoard, onShare }) {
           }} />
         <div className="absolute inset-y-0 right-1 flex items-center text-[10px]">🏁</div>
       </div>
-      <div className="text-xs" style={{ color: pct >= 80 ? T.green : T.gray }}>
+      <div className="text-xs mb-3.5" style={{ color: pct >= 80 ? T.green : T.gray }}>
         Đạt {c.periods_passed}/{c.periods_total} kỳ ({pct}%) · cần ≥80% để về đích
       </div>
+
+      {/* Bong bóng Cà khịa / Động viên tự động */}
+      {(() => {
+        const banter = getBanterMessage(c, pct, settled, won);
+        return (
+          <div className="p-3 rounded-2xl flex items-start gap-2.5 transition-all duration-300 relative overflow-hidden" 
+            style={{ 
+              background: banter.bg, 
+              border: `1.5px dashed ${banter.color}22` 
+            }}>
+            <div className="absolute top-0 right-0 w-24 h-24 -mr-6 -mt-6 rounded-full opacity-5 pointer-events-none" style={{ background: banter.color }} />
+            <span className="text-2xl shrink-0 mt-0.5 animate-bounce" style={{ animationDuration: '2.5s' }}>{banter.avatar}</span>
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-widest font-black mb-0.5" style={{ color: banter.color }}>
+                {banter.sender}
+              </div>
+              <div className="text-[11px] font-bold leading-normal text-white/90">
+                "{banter.text}"
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
