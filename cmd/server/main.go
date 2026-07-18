@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -74,15 +75,19 @@ func run(log *slog.Logger) error {
 		mustEnv("STRAVA_CLIENT_SECRET")
 	}
 
-	// Đảm bảo enum goal_type hỗ trợ daily_distance_km
-	_, _ = pool.Exec(ctx, `ALTER TYPE goal_type ADD VALUE IF NOT EXISTS 'daily_distance_km'`)
-
-	// Đảm bảo cấu trúc cột từ thiện và tài khoản quỹ
-	_, _ = pool.Exec(ctx, `ALTER TABLE challenges ADD COLUMN IF NOT EXISTS is_charity boolean DEFAULT false`)
-	_, _ = pool.Exec(ctx, `ALTER TABLE challenges ADD COLUMN IF NOT EXISTS charity_id integer DEFAULT 0`)
-	_, _ = pool.Exec(ctx, `
+	// DDL khởi động (autocommit — KHÔNG đưa vào migration được: runner bọc mỗi
+	// file trong transaction, mà ALTER TYPE ADD VALUE không chạy trong tx). Trước
+	// đây nuốt lỗi bằng `_, _ =` → schema thiếu cột mà app vẫn chạy, lỗi khó lần.
+	// Giờ log rõ (IF NOT EXISTS nên chạy lại vô hại).
+	ddlBoot(ctx, pool, log, "enum daily_distance_km",
+		`ALTER TYPE goal_type ADD VALUE IF NOT EXISTS 'daily_distance_km'`)
+	ddlBoot(ctx, pool, log, "cột is_charity",
+		`ALTER TABLE challenges ADD COLUMN IF NOT EXISTS is_charity boolean DEFAULT false`)
+	ddlBoot(ctx, pool, log, "cột charity_id",
+		`ALTER TABLE challenges ADD COLUMN IF NOT EXISTS charity_id integer DEFAULT 0`)
+	ddlBoot(ctx, pool, log, "seed tài khoản quỹ", `
 		INSERT INTO users (id, email, display_name, password_hash, created_at)
-		VALUES 
+		VALUES
 			(1001, 'charity.smile@keo.vn', 'Quỹ Phẫu Thuật Nụ Cười', '', now()),
 			(1002, 'charity.forest@keo.vn', 'Quỹ Trồng Rừng Gieo Mầm Xanh', '', now()),
 			(1003, 'charity.organic@keo.vn', 'Quỹ Run Organic', '', now())
@@ -271,17 +276,23 @@ func run(log *slog.Logger) error {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			p := filepath.Join(dist, filepath.Clean(r.URL.Path))
 			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				// Asset Vite có hash trong tên (/assets/*) → cache vĩnh viễn.
+				if strings.HasPrefix(r.URL.Path, "/assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				}
 				fileServer.ServeHTTP(w, r)
 				return
 			}
-			http.ServeFile(w, r, filepath.Join(dist, "index.html")) // SPA fallback
+			// SPA fallback: index.html KHÔNG cache (mỗi deploy trỏ asset hash mới).
+			w.Header().Set("Cache-Control", "no-cache")
+			http.ServeFile(w, r, filepath.Join(dist, "index.html"))
 		})
 		log.Info("serving web UI", "dist", dist)
 	}
 
 	// H7: chặn body khổng lồ (DoS cạn RAM) cho MỌI endpoint tại một chỗ. Webhook/
 	// health-sync đã tự LimitReader 1MiB nên trần 2MiB ở đây trong suốt với chúng.
-	handler := maxBodyBytes(mux, 2<<20)
+	handler := secureHeaders(maxBodyBytes(mux, 2<<20))
 
 	// H1: đủ bộ timeout — ReadHeaderTimeout đơn lẻ không chặn slow-loris ở body,
 	// request treo giữ goroutine vô hạn, và ghi response không có trần thời gian.
@@ -361,6 +372,17 @@ func envOr(key, def string) string {
 	return def
 }
 
+// secureHeaders gắn header bảo mật cơ bản cho mọi response. SAMEORIGIN (không
+// DENY) để không chặn nhúng cùng origin (web UI có thể chạy trong webview).
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // maxBodyBytes bọc mọi request để giới hạn kích thước body — vượt trần thì lần
 // đọc tiếp theo trả lỗi, handler tự trả 400. GET/không body: no-op.
 func maxBodyBytes(next http.Handler, n int64) http.Handler {
@@ -377,6 +399,13 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// ddlBoot chạy một câu DDL khởi động (autocommit), log lỗi thay vì nuốt.
+func ddlBoot(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger, step, sql string) {
+	if _, err := pool.Exec(ctx, sql); err != nil {
+		log.Warn("startup DDL lỗi (bỏ qua — có thể đã áp)", "step", step, "err", err)
+	}
 }
 
 func isAllZero(b []byte) bool {

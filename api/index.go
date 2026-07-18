@@ -79,15 +79,19 @@ func initApp() {
 		panic(fmt.Sprintf("connect db: %v", err))
 	}
 
-	// Đảm bảo enum goal_type hỗ trợ daily_distance_km
-	_, _ = pool.Exec(ctx, `ALTER TYPE goal_type ADD VALUE IF NOT EXISTS 'daily_distance_km'`)
-
-	// Đảm bảo cấu trúc cột từ thiện và tài khoản quỹ
-	_, _ = pool.Exec(ctx, `ALTER TABLE challenges ADD COLUMN IF NOT EXISTS is_charity boolean DEFAULT false`)
-	_, _ = pool.Exec(ctx, `ALTER TABLE challenges ADD COLUMN IF NOT EXISTS charity_id integer DEFAULT 0`)
-	_, _ = pool.Exec(ctx, `
+	// DDL khởi động (autocommit — không đưa vào migration: runner bọc trong tx mà
+	// ALTER TYPE ADD VALUE không chạy trong tx). Log lỗi thay vì nuốt `_, _ =`.
+	ddlBoot := func(step, sql string) {
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			log.Warn("startup DDL lỗi (bỏ qua — có thể đã áp)", "step", step, "err", err)
+		}
+	}
+	ddlBoot("enum daily_distance_km", `ALTER TYPE goal_type ADD VALUE IF NOT EXISTS 'daily_distance_km'`)
+	ddlBoot("cột is_charity", `ALTER TABLE challenges ADD COLUMN IF NOT EXISTS is_charity boolean DEFAULT false`)
+	ddlBoot("cột charity_id", `ALTER TABLE challenges ADD COLUMN IF NOT EXISTS charity_id integer DEFAULT 0`)
+	ddlBoot("seed tài khoản quỹ", `
 		INSERT INTO users (id, email, display_name, password_hash, created_at)
-		VALUES 
+		VALUES
 			(1001, 'charity.smile@keo.vn', 'Quỹ Phẫu Thuật Nụ Cười', '', now()),
 			(1002, 'charity.forest@keo.vn', 'Quỹ Trồng Rừng Gieo Mầm Xanh', '', now()),
 			(1003, 'charity.organic@keo.vn', 'Quỹ Run Organic', '', now())
