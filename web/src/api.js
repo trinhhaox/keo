@@ -77,6 +77,7 @@ export const checkIn = () => req("POST", "/v1/checkins");
 export const getShop = () => req("GET", "/v1/shop");
 export const redeem = (sku, fulfillment) => req("POST", "/v1/redemptions", { sku, fulfillment });
 export const getRedemptions = () => req("GET", "/v1/redemptions");
+export const getCharitiesStats = () => req("GET", "/v1/charities/stats");
 
 // ===== Health/Fit sync (demo: gửi bucket hôm nay đạt chỉ tiêu) =====
 export function syncHealthDemo(source, sport, goalType, goalValue) {

@@ -94,11 +94,11 @@ func (j *SettlementJob) settleOne(ctx context.Context, challengeID int64) error 
 
 	var c Challenge
 	err = tx.QueryRow(ctx, `
-		SELECT id, stake_points, fee_bps, pass_ratio, status
+		SELECT id, stake_points, fee_bps, pass_ratio, status, is_charity, charity_id
 		FROM challenges WHERE id = $1 AND status = 'settling'
 		FOR UPDATE SKIP LOCKED`,
 		challengeID,
-	).Scan(&c.ID, &c.StakePoints, &c.FeeBps, &c.PassRatio, &c.Status)
+	).Scan(&c.ID, &c.StakePoints, &c.FeeBps, &c.PassRatio, &c.Status, &c.IsCharity, &c.CharityID)
 	if err == pgx.ErrNoRows {
 		return nil // instance khác đang xử lý, hoặc đã settled — bỏ qua
 	}
@@ -155,7 +155,13 @@ func (j *SettlementJob) settleOne(ctx context.Context, challengeID int64) error 
 		params.FailedIDs = append(params.FailedIDs, o.userID)
 	}
 	if len(completed)+len(failed) > 0 {
-		req, err := ledger.SettlementRequest(params)
+		var req ledger.Request
+		var err error
+		if c.IsCharity {
+			req, err = ledger.CharitySettlementRequest(params, c.CharityID)
+		} else {
+			req, err = ledger.SettlementRequest(params)
+		}
 		if err != nil {
 			return fmt.Errorf("build settlement: %w", err)
 		}

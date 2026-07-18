@@ -228,3 +228,48 @@ func AdminAdjustRequest(userID, delta int64, refKey string) Request {
 	}
 }
 
+// CharitySettlementRequest: chốt kèo từ thiện.
+// Người đỗ được hoàn trả điểm cược. Điểm cược người trượt quyên góp 100% cho quỹ.
+func CharitySettlementRequest(p SettlementParams, charityUserID int64) (Request, error) {
+	if p.StakePoints <= 0 {
+		return Request{}, fmt.Errorf("%w: stake must be > 0", ErrInvalidRequest)
+	}
+	seen := make(map[int64]bool, len(p.CompletedIDs)+len(p.FailedIDs))
+	for _, id := range append(append([]int64{}, p.CompletedIDs...), p.FailedIDs...) {
+		if seen[id] {
+			return Request{}, fmt.Errorf("%w: user %d appears twice in settlement", ErrInvalidRequest, id)
+		}
+		seen[id] = true
+	}
+
+	entries := make([]Entry, 0, 2*len(p.FailedIDs)+2*len(p.CompletedIDs))
+
+	for _, uid := range p.FailedIDs {
+		entries = append(entries,
+			Entry{Account: UserLocked(uid), Amount: -p.StakePoints},
+			Entry{Account: UserAvailable(charityUserID), Amount: +p.StakePoints},
+		)
+	}
+	for _, uid := range p.CompletedIDs {
+		entries = append(entries,
+			Entry{Account: UserLocked(uid), Amount: -p.StakePoints},
+			Entry{Account: UserAvailable(uid), Amount: +p.StakePoints},
+		)
+	}
+
+	totalDonated := p.StakePoints * int64(len(p.FailedIDs))
+
+	return Request{
+		Type:           TxnCharityDonation,
+		IdempotencyKey: fmt.Sprintf("charity_settle:challenge=%d", p.ChallengeID),
+		Metadata: map[string]any{
+			"challenge_id":  p.ChallengeID,
+			"charity_id":    charityUserID,
+			"total_donated": totalDonated,
+			"completed":     len(p.CompletedIDs),
+			"failed":        len(p.FailedIDs),
+		},
+		Entries: entries,
+	}, nil
+}
+

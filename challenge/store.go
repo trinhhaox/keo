@@ -29,11 +29,12 @@ func (s *Store) Create(ctx context.Context, c Challenge) (int64, error) {
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO challenges
 			(creator_id, title, sport, goal_type, goal_value, source,
-			 stake_points, fee_bps, pass_ratio, start_at, end_at, grace_hours, status, max_participants)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13)
+			 stake_points, fee_bps, pass_ratio, start_at, end_at, grace_hours, status, max_participants, is_charity, charity_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14,$15)
 		RETURNING id`,
 		c.CreatorID, c.Title, c.Sport, c.GoalType, c.GoalValue, c.Source,
 		c.StakePoints, c.FeeBps, c.PassRatio, c.StartAt, c.EndAt, c.GraceHours, c.MaxParticipants,
+		c.IsCharity, c.CharityID,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("create challenge: %w", err)
@@ -62,10 +63,10 @@ func (s *Store) Join(ctx context.Context, challengeID, userID int64) (int64, err
 	// đổi status trong lúc đang join.
 	var c Challenge
 	err = tx.QueryRow(ctx, `
-		SELECT id, goal_type, goal_value, stake_points, start_at, end_at, status, max_participants
+		SELECT id, goal_type, goal_value, stake_points, start_at, end_at, status, max_participants, is_charity, charity_id
 		FROM challenges WHERE id = $1 FOR UPDATE`,
 		challengeID,
-	).Scan(&c.ID, &c.GoalType, &c.GoalValue, &c.StakePoints, &c.StartAt, &c.EndAt, &c.Status, &c.MaxParticipants)
+	).Scan(&c.ID, &c.GoalType, &c.GoalValue, &c.StakePoints, &c.StartAt, &c.EndAt, &c.Status, &c.MaxParticipants, &c.IsCharity, &c.CharityID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrNotFound
 	}

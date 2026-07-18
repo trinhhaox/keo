@@ -49,6 +49,17 @@ func run(log *slog.Logger) error {
 	// Đảm bảo enum goal_type hỗ trợ daily_distance_km
 	_, _ = pool.Exec(ctx, `ALTER TYPE goal_type ADD VALUE IF NOT EXISTS 'daily_distance_km'`)
 
+	// Đảm bảo cấu trúc cột từ thiện và tài khoản quỹ
+	_, _ = pool.Exec(ctx, `ALTER TABLE challenges ADD COLUMN IF NOT EXISTS is_charity boolean DEFAULT false`)
+	_, _ = pool.Exec(ctx, `ALTER TABLE challenges ADD COLUMN IF NOT EXISTS charity_id integer DEFAULT 0`)
+	_, _ = pool.Exec(ctx, `
+		INSERT INTO users (id, email, display_name, password_hash, created_at)
+		VALUES 
+			(1001, 'charity.smile@keo.vn', 'Quỹ Phẫu Thuật Nụ Cười', '', now()),
+			(1002, 'charity.forest@keo.vn', 'Quỹ Trồng Rừng Gieo Mầm Xanh', '', now())
+		ON CONFLICT (id) DO NOTHING
+	`)
+
 	// ===== Services =====
 	ledgerStore := ledger.NewPGStore(pool)
 	challengeStore := challenge.NewStore(pool, ledgerStore)

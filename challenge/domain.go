@@ -50,6 +50,8 @@ type Challenge struct {
 	GraceHours      int
 	Status          Status
 	MaxParticipants int
+	IsCharity       bool
+	CharityID       int64
 }
 
 type Enrollment struct {

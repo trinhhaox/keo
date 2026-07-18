@@ -33,3 +33,8 @@ export const GOALS = {
 
 export const fmtP = (n) => Number(n).toLocaleString("vi-VN") + " điểm";
 export const daysLeft = (endAt) => Math.max(0, Math.ceil((new Date(endAt) - Date.now()) / 86400000));
+
+export const CHARITIES = {
+  1001: { name: "Quỹ Phẫu Thuật Nụ Cười", desc: "Operation Smile - Phẫu thuật hàm ếch miễn phí cho trẻ em.", color: "#FF3366", logo: "👄" },
+  1002: { name: "Quỹ Gieo Mầm Xanh", desc: "Trồng rừng phòng hộ và phủ xanh các khu bảo tồn thiên nhiên.", color: "#33CC66", logo: "🌳" }
+};

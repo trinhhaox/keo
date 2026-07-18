@@ -26,13 +26,14 @@ const (
 type TxnType string
 
 const (
-	TxnPurchase     TxnType = "purchase"
-	TxnStakeLock    TxnType = "stake_lock"
-	TxnStakeRelease TxnType = "stake_release"
-	TxnSettlement   TxnType = "settlement"
-	TxnRedeem       TxnType = "redeem"
-	TxnRewardPayout TxnType = "reward_payout"
-	TxnAdminAdjust  TxnType = "admin_adjust"
+	TxnPurchase        TxnType = "purchase"
+	TxnStakeLock       TxnType = "stake_lock"
+	TxnStakeRelease    TxnType = "stake_release"
+	TxnSettlement      TxnType = "settlement"
+	TxnRedeem          TxnType = "redeem"
+	TxnRewardPayout    TxnType = "reward_payout"
+	TxnAdminAdjust     TxnType = "admin_adjust"
+	TxnCharityDonation TxnType = "charity_donation"
 )
 
 // AccountKey định danh logic một account. UserID/ChallengeID = 0 nghĩa là

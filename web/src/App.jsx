@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from "react";
-import { Flame, Target, ShoppingBag, Wallet, Trophy, Gift, Ticket, Medal, Mountain, Footprints, User, LogOut, ChevronRight, Share2, Sparkles, RefreshCw, SlidersHorizontal, TrendingUp, Users } from "lucide-react";
+import { Flame, Target, ShoppingBag, Wallet, Trophy, Gift, Ticket, Medal, Mountain, Footprints, User, LogOut, ChevronRight, Share2, Sparkles, RefreshCw, SlidersHorizontal, TrendingUp, Users, Heart } from "lucide-react";
 import * as api from "./api.js";
-import { T, MONO, SPORTS, SOURCES, GOALS, fmtP, daysLeft } from "./theme.js";
+import { T, MONO, SPORTS, SOURCES, GOALS, CHARITIES, fmtP, daysLeft } from "./theme.js";
 import LeaderboardSheet from "./leaderboard-sheet.jsx";
 import { StreakCard, ActivityFeed } from "./activity-feed.jsx";
 import { NotificationToast, detectToastType } from "./notification.jsx";
@@ -282,7 +282,10 @@ function ChallengeCard({ c, onJoin, onBoard, onShare }) {
           <Icon size={28} strokeWidth={1.5} />
         </div>
         <div className="min-w-0">
-          <div className="text-[17px] font-bold leading-tight mb-1" style={{ color: T.text }}>{c.title}</div>
+          <div className="text-[17px] font-bold leading-tight mb-1 flex flex-wrap items-center gap-1.5" style={{ color: T.text }}>
+            {c.is_charity && <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md text-glow select-none" style={{ background: "rgba(255, 51, 102, 0.15)", color: "#FF3366", border: "1px solid rgba(255, 51, 102, 0.3)" }}>🎗️ TỪ THIỆN</span>}
+            {c.title}
+          </div>
           <div className="text-xs mb-1.5 font-medium" style={{ color: T.textDim }}>
             Thời gian: <span className="font-semibold text-white">{new Date(c.start_at).toLocaleDateString("vi-VN", {day:"2-digit",month:"2-digit"})}</span> - <span className="font-semibold text-white">{new Date(c.end_at).toLocaleDateString("vi-VN", {day:"2-digit",month:"2-digit"})}</span>
           </div>
@@ -300,11 +303,17 @@ function ChallengeCard({ c, onJoin, onBoard, onShare }) {
         <div>
           <div className="text-[10px] uppercase tracking-widest font-bold mb-1" style={{ color: T.textDim }}>Điểm cược</div>
           <div className="text-xl font-bold text-glow" style={{ ...MONO, color: T.brand }}>{c.stake_points}</div>
-          <div className="text-[11px] mt-1 font-semibold" style={{ color: T.green }}>Hoàn cược + chia quỹ người rớt</div>
+          {c.is_charity ? (
+            <div className="text-[11px] mt-1 font-semibold" style={{ color: CHARITIES[c.charity_id]?.color || T.brand }}>
+              Quyên góp: {CHARITIES[c.charity_id]?.name || "Từ thiện"}
+            </div>
+          ) : (
+            <div className="text-[11px] mt-1 font-semibold" style={{ color: T.green }}>Hoàn cược + chia quỹ người rớt</div>
+          )}
         </div>
         <div className="text-right flex items-center gap-2">
           <div>
-            <div className="text-[10px] uppercase tracking-widest mb-1.5 font-bold" style={{ color: T.textDim }}>Quỹ {fmtP(pot)}</div>
+            <div className="text-[10px] uppercase tracking-widest mb-1.5 font-bold" style={{ color: T.textDim }}>{c.is_charity ? "Quỹ từ thiện" : `Quỹ ${fmtP(pot)}`}</div>
             <div className="flex gap-2 justify-end">
               <button onClick={(e) => { e.stopPropagation(); onShare(c.id, c.title); }} 
                 className="p-2.5 rounded-xl transition-all hover:bg-white/5 active:scale-95" 
@@ -338,9 +347,13 @@ function MyChallengeCard({ c, onSync, busy, onBoard, onShare }) {
           <Icon size={22} strokeWidth={2} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-bold leading-tight" style={{ color: T.text }}>{c.title}</div>
+          <div className="text-[15px] font-bold leading-tight flex items-center gap-1.5 flex-wrap" style={{ color: T.text }}>
+            {c.is_charity && <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-pink-950/20 text-[#FF3366] border border-[#FF3366]/30 select-none">🎗️ TỪ THIỆN</span>}
+            {c.title}
+          </div>
           <div className="text-xs" style={{ color: T.textDim }}>
             {settled ? "đã chốt sổ" : `còn ${daysLeft(c.end_at)} ngày`} · cược {fmtP(c.stake_points)}
+            {c.is_charity && <span className="text-[10px] ml-1.5 font-bold" style={{ color: CHARITIES[c.charity_id]?.color || T.brand }}>({CHARITIES[c.charity_id]?.name})</span>}
           </div>
         </div>
         {settled && <span className="text-xs font-bold px-2.5 py-1 rounded-full shrink-0"
@@ -458,6 +471,8 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
     d.setDate(d.getDate() + 30);
     return d.toISOString().split('T')[0];
   });
+  const [isCharity, setIsCharity] = useState(false);
+  const [charityId, setCharityId] = useState(1001);
 
   // Đồng bộ stake mặc định khi mở modal hoặc ví khả dụng thay đổi
   useEffect(() => {
@@ -560,6 +575,56 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
             })}
         </div>
 
+        {/* Toggle Kèo Từ Thiện */}
+        <div className="flex items-center justify-between p-3.5 rounded-2xl mb-4" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
+          <div className="flex items-center gap-2">
+            <Heart size={16} className="animate-pulse" style={{ color: T.red }} />
+            <div>
+              <div className="text-xs font-bold" style={{ color: T.text }}>🎗️ Kèo Từ Thiện</div>
+              <div className="text-[10px]" style={{ color: T.textDim }}>Quyên góp cược thua vào quỹ</div>
+            </div>
+          </div>
+          <button 
+            onClick={() => setIsCharity(!isCharity)}
+            className={`w-10 h-5.5 rounded-full transition-colors relative flex items-center px-0.5`}
+            style={{ background: isCharity ? T.brand : T.line }}
+          >
+            <div 
+              className="w-4.5 h-4.5 rounded-full bg-white shadow-sm transition-transform"
+              style={{ transform: isCharity ? 'translateX(18px)' : 'translateX(0)' }}
+            />
+          </button>
+        </div>
+
+        {/* Danh sách Quỹ từ thiện */}
+        {isCharity && (
+          <div className="mb-4 p-3 rounded-2xl" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
+            <div className="text-xs font-bold mb-2" style={{ color: T.textDim }}>Chọn Quỹ quyên góp</div>
+            <div className="flex flex-col gap-2">
+              {Object.entries(CHARITIES).map(([k, v]) => (
+                <button
+                  key={k}
+                  onClick={() => setCharityId(Number(k))}
+                  className="flex items-start gap-2.5 p-2 rounded-xl text-left transition-all"
+                  style={{
+                    background: charityId === Number(k) ? T.card : 'transparent',
+                    border: charityId === Number(k) ? `1.5px solid ${v.color}` : `1px solid ${T.line}`
+                  }}
+                >
+                  <span className="text-lg mt-0.5">{v.logo}</span>
+                  <div>
+                    <div className="text-xs font-bold" style={{ color: charityId === Number(k) ? v.color : T.text }}>{v.name}</div>
+                    <div className="text-[10px]" style={{ color: T.textDim }}>{v.desc}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="text-[9px] leading-relaxed font-bold mt-2 px-1 text-center" style={{ color: T.brand }}>
+              💡 Thắng hoàn cược, thua quyên góp 100% quỹ. Miễn phí nền tảng!
+            </div>
+          </div>
+        )}
+
         <Label>Điểm cược mỗi người</Label>
         <div className="rounded-2xl p-4 mb-5" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
           <div className="flex justify-between items-center mb-2">
@@ -591,6 +656,8 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
               sport, goal_type: goalType, goal_value: goal, source,
               stake_points: stake, duration_days: days, max_participants: maxParticipants,
               start_at: startAt,
+              is_charity: isCharity,
+              charity_id: isCharity ? charityId : 0,
             })}
             className="w-full py-3.5 rounded-2xl font-bold text-[15px] active:scale-[.98] transition-transform"
             style={{ background: T.brand, color: T.bg, opacity: busy ? 0.6 : 1 }}>
@@ -660,6 +727,7 @@ function AppCore({ userProfile, onLogout }) {
   const [redeemConfirm, setRedeemConfirm] = useState(null);
   const [deliveryForm, setDeliveryForm] = useState(null);
   const [redemptions, setRedemptions] = useState([]);
+  const [charityStats, setCharityStats] = useState({ "1001": 0, "1002": 0 });
 
   // Filter/Sort state
   const [sportFilter, setSportFilter] = useState(null);
@@ -683,14 +751,15 @@ function AppCore({ userProfile, onLogout }) {
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const [w, cs, m, sh, tx, st, ac, rw, rd] = await Promise.all([
+      const [w, cs, m, sh, tx, st, ac, rw, rd, ch] = await Promise.all([
         api.getWallet(), api.listChallenges(), api.myChallenges(), api.getShop(), api.getTransactions(),
         api.getMyStats(), api.getMyActivities(),
         // Rewards lỗi không được kéo sập cả app — degrade thành ẩn thẻ thưởng.
         api.getRewards().catch(() => null),
         api.getRedemptions().catch(() => []),
+        api.getCharitiesStats().catch(() => ({ "1001": 0, "1002": 0 })),
       ]);
-      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac); setRewards(rw); setRedemptions(rd);
+      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac); setRewards(rw); setRedemptions(rd); setCharityStats(ch);
     } catch (e) {
       if (e.status === 401) { onLogout(); }
       else showToast(`Lỗi tải dữ liệu: ${e.message}`, "error");
@@ -866,6 +935,27 @@ function AppCore({ userProfile, onLogout }) {
 
             {tab === "shop" && (
               <div key={tabKey} className="fade-in-up">
+                {/* Widget Vinh Danh Quyên Góp Từ Thiện */}
+                <div className="rounded-3xl p-5 mb-6 text-left relative overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Heart size={16} className="animate-pulse" style={{ color: T.red }} />
+                    <div className="text-xs font-bold uppercase tracking-wider" style={{ color: T.text }}>🎗️ Quỹ Cộng Đồng Kèo</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {Object.entries(CHARITIES).map(([k, v]) => (
+                      <div key={k} className="p-3 rounded-2xl" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <span className="text-base">{v.logo}</span>
+                          <div className="text-[10px] font-bold truncate" style={{ color: T.textDim }} title={v.name}>{v.name}</div>
+                        </div>
+                        <div className="text-xs font-black text-glow" style={{ ...MONO, color: v.color }}>
+                          {Number(charityStats[k] || 0).toLocaleString("vi-VN")} pts
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="text-sm font-bold mb-4 uppercase tracking-widest" style={{ color: T.textDim }}>Đổi điểm lấy thưởng</div>
                 {loading ? (
                   <>{[0,1,2].map(i => <div key={i} className="skeleton h-20 rounded-2xl mb-3" />)}</>

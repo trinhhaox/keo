@@ -66,6 +66,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/shop", s.withAuth(s.shop))
 	mux.HandleFunc("POST /v1/auth/zalo", s.zaloLogin)
 	mux.HandleFunc("POST /v1/auth/zalo/verify", s.zaloVerify)
+	mux.HandleFunc("GET /v1/charities/stats", s.withAuth(s.charitiesStats))
 
 	// ===== Admin APIs =====
 	mux.HandleFunc("GET /v1/admin/users", s.withAdminAuth(s.adminListUsers))
@@ -220,7 +221,7 @@ func (s *Server) listChallenges(w http.ResponseWriter, r *http.Request, userID i
 		       c.stake_points, c.start_at, c.end_at, c.status,
 		       COUNT(e.id) AS participants,
 		       COUNT(e.id) FILTER (WHERE e.user_id = $1) > 0 AS joined,
-		       c.max_participants
+		       c.max_participants, c.is_charity, c.charity_id
 		FROM challenges c
 		LEFT JOIN enrollments e ON e.challenge_id = c.id
 		WHERE c.status IN ('open', 'active')
@@ -247,13 +248,15 @@ func (s *Server) listChallenges(w http.ResponseWriter, r *http.Request, userID i
 		Participants    int64     `json:"participants"`
 		Joined          bool      `json:"joined"`
 		MaxParticipants int64     `json:"max_participants"`
+		IsCharity       bool      `json:"is_charity"`
+		CharityID       int64     `json:"charity_id"`
 	}
 	out := []item{}
 	for rows.Next() {
 		var it item
 		if err := rows.Scan(&it.ID, &it.Title, &it.Sport, &it.GoalType, &it.GoalValue,
 			&it.Source, &it.StakePoints, &it.StartAt, &it.EndAt, &it.Status,
-			&it.Participants, &it.Joined, &it.MaxParticipants); err != nil {
+			&it.Participants, &it.Joined, &it.MaxParticipants, &it.IsCharity, &it.CharityID); err != nil {
 			httpError(w, http.StatusInternalServerError, "scan")
 			return
 		}
@@ -273,6 +276,8 @@ func (s *Server) createChallenge(w http.ResponseWriter, r *http.Request, userID 
 		DurationDays    int     `json:"duration_days"`
 		MaxParticipants int     `json:"max_participants"`
 		StartAt         string  `json:"start_at"`
+		IsCharity       bool    `json:"is_charity"`
+		CharityID       int64   `json:"charity_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpError(w, http.StatusBadRequest, "bad json")
@@ -306,13 +311,20 @@ func (s *Server) createChallenge(w http.ResponseWriter, r *http.Request, userID 
 		startAt = time.Date(nowVN.Year(), nowVN.Month(), nowVN.Day(), 0, 0, 0, 0, challenge.VNLocation)
 	}
 
+	feeBps := int64(1000)
+	if body.IsCharity {
+		feeBps = 0 // miễn phí cho kèo từ thiện
+	}
+
 	id, err := s.challenges.Create(r.Context(), challenge.Challenge{
 		CreatorID: userID, Title: body.Title, Sport: body.Sport,
 		GoalType: challenge.GoalType(body.GoalType), GoalValue: body.GoalValue,
 		Source: body.Source, StakePoints: body.StakePoints,
-		FeeBps: 1000, PassRatio: 0.8,
+		FeeBps: feeBps, PassRatio: 0.8,
 		StartAt: startAt, EndAt: startAt.AddDate(0, 0, body.DurationDays), GraceHours: 48,
 		MaxParticipants: body.MaxParticipants,
+		IsCharity:       body.IsCharity,
+		CharityID:       body.CharityID,
 	})
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
@@ -363,7 +375,8 @@ func (s *Server) myChallenges(w http.ResponseWriter, r *http.Request, userID int
 		       c.stake_points, c.start_at, c.end_at, c.status AS challenge_status,
 		       e.status,
 		       COUNT(p.*)                          AS periods_total,
-		       COUNT(*) FILTER (WHERE p.passed)    AS periods_passed
+		       COUNT(*) FILTER (WHERE p.passed)    AS periods_passed,
+		       c.is_charity, c.charity_id
 		FROM enrollments e
 		JOIN challenges c ON c.id = e.challenge_id
 		LEFT JOIN enrollment_periods p ON p.enrollment_id = e.id
@@ -391,13 +404,15 @@ func (s *Server) myChallenges(w http.ResponseWriter, r *http.Request, userID int
 		Status          string    `json:"status"`
 		PeriodsTotal    int       `json:"periods_total"`
 		PeriodsPassed   int       `json:"periods_passed"`
+		IsCharity       bool      `json:"is_charity"`
+		CharityID       int64     `json:"charity_id"`
 	}
 	out := []item{}
 	for rows.Next() {
 		var it item
 		if err := rows.Scan(&it.ChallengeID, &it.Title, &it.Sport, &it.Source,
 			&it.GoalType, &it.GoalValue, &it.StakePoints, &it.StartAt, &it.EndAt,
-			&it.ChallengeStatus, &it.Status, &it.PeriodsTotal, &it.PeriodsPassed); err != nil {
+			&it.ChallengeStatus, &it.Status, &it.PeriodsTotal, &it.PeriodsPassed, &it.IsCharity, &it.CharityID); err != nil {
 			httpError(w, http.StatusInternalServerError, "scan")
 			return
 		}
@@ -555,5 +570,35 @@ func (s *Server) listRedemptions(w http.ResponseWriter, r *http.Request, userID 
 		}
 		out = append(out, rd)
 	}
+	writeJSON(w, out)
+}
+
+// charitiesStats trả về số dư (tổng đóng góp) của các quỹ từ thiện
+func (s *Server) charitiesStats(w http.ResponseWriter, r *http.Request, userID int64) {
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT user_id, COALESCE(balance, 0)
+		FROM ledger_accounts
+		WHERE user_id IN (1001, 1002) AND type = 'user_available'
+	`)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "query failed: "+err.Error())
+		return
+	}
+	defer rows.Close()
+
+	out := map[string]int64{
+		"1001": 0,
+		"1002": 0,
+	}
+
+	for rows.Next() {
+		var cid, bal int64
+		if err := rows.Scan(&cid, &bal); err != nil {
+			httpError(w, http.StatusInternalServerError, "scan failed: "+err.Error())
+			return
+		}
+		out[fmt.Sprintf("%d", cid)] = bal
+	}
+
 	writeJSON(w, out)
 }
