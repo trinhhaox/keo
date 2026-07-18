@@ -586,12 +586,12 @@ function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
           </div>
           <button 
             onClick={() => setIsCharity(!isCharity)}
-            className={`w-10 h-5.5 rounded-full transition-colors relative flex items-center px-0.5`}
+            className="w-11 h-6 rounded-full transition-colors relative flex items-center px-0.5"
             style={{ background: isCharity ? T.brand : T.line }}
           >
             <div 
-              className="w-4.5 h-4.5 rounded-full bg-white shadow-sm transition-transform"
-              style={{ transform: isCharity ? 'translateX(18px)' : 'translateX(0)' }}
+              className="w-5 h-5 rounded-full bg-white shadow-sm transition-transform"
+              style={{ transform: isCharity ? 'translateX(20px)' : 'translateX(0)' }}
             />
           </button>
         </div>
