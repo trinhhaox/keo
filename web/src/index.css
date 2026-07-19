@@ -1,4 +1,7 @@
 /* index.css - Global styles and utility classes for Dark Athletic theme */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 body {
   margin: 0;
