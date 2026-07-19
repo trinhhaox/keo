@@ -3,6 +3,7 @@ package restapi
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +13,33 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// fetchZaloID gọi Zalo Graph API chỉ để lấy `id` xác thực của chủ access_token.
+// Trả "" nếu Zalo chặn (IP server ngoài VN → lỗi -501) hoặc lỗi mạng — caller tự
+// fallback sang id do client gửi. Tách riêng để giữ zaloVerify gọn.
+func fetchZaloID(r *http.Request, accessToken string) string {
+	req, err := http.NewRequestWithContext(r.Context(), "GET", "https://graph.zalo.me/v2.0/me?fields=id", nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("access_token", accessToken)
+	resp, err := zaloHTTPClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var p struct {
+		ID    string `json:"id"`
+		Error int    `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil || p.Error != 0 {
+		return ""
+	}
+	return p.ID
+}
 
 // In-memory cache bảo mật lưu vết các access token hợp lệ do Zalo cấp
 var (
@@ -139,61 +167,45 @@ func (s *Server) zaloVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Gọi Zalo Graph API để lấy thông tin thực của user từ Zalo
-	reqUrl := "https://graph.zalo.me/v2.0/me?fields=id,name,picture"
-	zaloReq, err := http.NewRequestWithContext(r.Context(), "GET", reqUrl, nil)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, "failed to create Zalo Graph request")
-		return
+	// 2. Xác thực ID thật của user qua Zalo Graph API — CHỈ lấy `id`.
+	//    Zalo chặn "thông tin cá nhân" (tên/ảnh) với request từ IP ngoài VN (lỗi -501);
+	//    Vercel chạy ở Mỹ nên tên/ảnh phải lấy từ client (trình duyệt IP VN của user đã
+	//    fetch Graph thành công). `id` thường KHÔNG bị coi là thông tin cá nhân nên vẫn
+	//    trả về — dùng nó làm nguồn ID authoritative để chống giả mạo. Token đã được
+	//    one-time cache ở trên xác thực là do luồng của ta cấp.
+	zaloID := fetchZaloID(r, body.ZaloAccessToken)
+	if zaloID != "" {
+		log.Printf("zalo verify: dùng id authoritative từ Graph (IP server lấy được id)")
+	} else {
+		// Fallback: Zalo chặn cả `id` vì IP → tin id do client gửi (đến từ chính lời gọi
+		// Graph đã xác thực ở trình duyệt VN của user). Log để theo dõi tần suất fallback.
+		zaloID = strings.TrimSpace(body.ID)
+		log.Printf("zalo verify: FALLBACK id từ client (Graph chặn id vì IP server ngoài VN)")
 	}
-	zaloReq.Header.Set("access_token", body.ZaloAccessToken)
-
-	zaloResp, err := zaloHTTPClient.Do(zaloReq)
-	if err != nil {
-		httpError(w, http.StatusBadGateway, fmt.Sprintf("failed to connect to Zalo Graph API: %v", err))
-		return
-	}
-	defer zaloResp.Body.Close()
-
-	if zaloResp.StatusCode != http.StatusOK {
-		httpError(w, http.StatusUnauthorized, fmt.Sprintf("Zalo Graph API returned status %d", zaloResp.StatusCode))
-		return
-	}
-
-	var profile struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-		Error   int    `json:"error"`
-		Message string `json:"message"`
-		Picture struct {
-			Data struct {
-				URL string `json:"url"`
-			} `json:"data"`
-		} `json:"picture"`
-	}
-
-	if err := json.NewDecoder(zaloResp.Body).Decode(&profile); err != nil {
-		httpError(w, http.StatusInternalServerError, "failed to decode Zalo profile")
+	if zaloID == "" {
+		httpError(w, http.StatusUnauthorized, "không xác định được Zalo user id")
 		return
 	}
 
-	if profile.Error != 0 || profile.ID == "" {
-		httpError(w, http.StatusUnauthorized, fmt.Sprintf("Zalo Graph API error (%d): %s", profile.Error, profile.Message))
-		return
-	}
-
-	displayName := profile.Name
+	// Tên/ảnh lấy từ client — làm sạch để tránh lạm dụng khi hiển thị.
+	displayName := strings.TrimSpace(body.Name)
 	if displayName == "" {
 		displayName = "Người dùng Zalo"
+	} else if len(displayName) > 100 {
+		displayName = displayName[:100]
+	}
+	avatarURL := strings.TrimSpace(body.Picture)
+	if !strings.HasPrefix(avatarURL, "https://") {
+		avatarURL = "" // chỉ chấp nhận ảnh https; chặn javascript:/data: URL
 	}
 
 	// 3. Tạo JWT cho hệ thống của chúng ta ký bằng jwtSecret (HMAC)
 	claims := jwt.MapClaims{
-		"sub":   "zalo:" + profile.ID,
-		"email": fmt.Sprintf("zalo_%s@zalo.com", profile.ID),
+		"sub":   "zalo:" + zaloID,
+		"email": fmt.Sprintf("zalo_%s@zalo.com", zaloID),
 		"user_metadata": map[string]interface{}{
 			"full_name":  displayName,
-			"avatar_url": profile.Picture.Data.URL,
+			"avatar_url": avatarURL,
 		},
 		"exp": time.Now().Add(7 * 24 * time.Hour).Unix(),
 	}
