@@ -1,0 +1,32 @@
+name: Strava sync cron
+
+# Vercel Hobby/Free chỉ cho cron chạy 1 lần/ngày. Dùng GitHub Actions (miễn phí
+# cho repo public) để gọi /api/cron/strava mỗi ~10 phút, drain hàng đợi webhook
+# Strava kịp thời. Cron Vercel daily trong vercel.json vẫn giữ làm backstop.
+#
+# Lưu ý: GitHub tự tắt scheduled workflow sau 60 ngày không có commit vào repo.
+on:
+  schedule:
+    - cron: "*/10 * * * *" # mỗi 10 phút (GitHub có thể trễ vài phút khi tải cao)
+  workflow_dispatch: {} # cho phép chạy tay từ tab Actions
+
+# Không chạy chồng nếu lần trước chưa xong
+concurrency:
+  group: strava-cron
+  cancel-in-progress: false
+
+jobs:
+  drain-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Gọi cron drain hàng đợi Strava
+        run: |
+          code=$(curl -s -m 90 -o /tmp/out.txt -w "%{http_code}" https://keo-seven.vercel.app/api/cron/strava || echo "000")
+          echo "HTTP $code"
+          cat /tmp/out.txt || true
+          # Không fail workflow vì lỗi tạm thời (event đã tự requeue/failed trong endpoint);
+          # chỉ cảnh báo để không spam email khi Strava/Vercel chập chờn.
+          if [ "$code" != "200" ]; then
+            echo "::warning::cron strava trả HTTP $code (sẽ thử lại lần chạy sau)"
+          fi
