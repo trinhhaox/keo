@@ -161,8 +161,15 @@ func (w *StravaWorker) ProcessOnce(ctx context.Context) (int, error) {
 
 	// Xử lý NGOÀI tx claim (gồm cả HTTP Strava).
 	applyErr := w.process(ctx, payload)
+
+	// ctx xử lý có thể đã hết hạn (fetch Strava chậm vượt ngân sách serverless).
+	// Dùng context RIÊNG cho lệnh cập nhật trạng thái cuối để luôn ghi được —
+	// nếu tái dùng ctx đã chết, event kẹt vĩnh viễn ở 'processing' và cron 500.
+	finishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	if applyErr == nil {
-		if _, err := w.pool.Exec(ctx, `
+		if _, err := w.pool.Exec(finishCtx, `
 			UPDATE webhook_inbox SET status = 'processed', processed_at = now(), error = NULL, claimed_at = NULL
 			WHERE id = $1`, inboxID); err != nil {
 			return 0, fmt.Errorf("mark processed: %w", err)
@@ -173,7 +180,7 @@ func (w *StravaWorker) ProcessOnce(ctx context.Context) (int, error) {
 	// Tạm thời + chưa hết lượt → giữ 'pending' với backoff (30s..180s).
 	if isTransient(applyErr) && attempts < maxStravaAttempts {
 		backoffSec := min(attempts, 6) * 30
-		if _, err := w.pool.Exec(ctx, `
+		if _, err := w.pool.Exec(finishCtx, `
 			UPDATE webhook_inbox
 			SET status = 'pending', claimed_at = NULL, error = $2,
 			    next_attempt_at = now() + make_interval(secs => $3)
@@ -185,7 +192,7 @@ func (w *StravaWorker) ProcessOnce(ctx context.Context) (int, error) {
 	}
 
 	// Vĩnh viễn / hết lượt → failed, chờ điều tra hoặc requeue tay.
-	if _, err := w.pool.Exec(ctx, `
+	if _, err := w.pool.Exec(finishCtx, `
 		UPDATE webhook_inbox SET status = 'failed', error = $2, processed_at = now(), claimed_at = NULL
 		WHERE id = $1`, inboxID, applyErr.Error()); err != nil {
 		return 0, fmt.Errorf("mark failed: %w", err)

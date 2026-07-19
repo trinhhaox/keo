@@ -2,6 +2,9 @@
   "buildCommand": "cd web && npm install && npm run build",
   "outputDirectory": "web/dist",
   "framework": "vite",
+  "functions": {
+    "api/index.go": { "maxDuration": 60 }
+  },
   "routes": [
     { "src": "/v1/(.*)", "dest": "/api/index.go" },
     { "src": "/webhooks/(.*)", "dest": "/api/index.go" },

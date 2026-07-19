@@ -223,26 +223,27 @@ func initApp() {
 
 	// CRON Endpoints
 	mux.HandleFunc("/api/cron/strava", func(w http.ResponseWriter, r *http.Request) {
-		// Vercel Cron headers check can be added here if needed
-		ctx, cancel := context.WithTimeout(r.Context(), 9*time.Second)
+		// Ngân sách rộng (bounded bởi maxDuration function) để drain hết hàng đợi.
+		ctx, cancel := context.WithTimeout(r.Context(), 50*time.Second)
 		defer cancel()
-		
+
 		// Tự phục hồi: đưa event kẹt 'processing' (crash giữa chừng) về lại queue.
-		// KHÔNG còn requeue MỌI 'failed' vô điều kiện — event hỏng vĩnh viễn sẽ
-		// retry vô tận; lỗi tạm thời nay tự retry qua backoff (next_attempt_at).
-		if err := stravaWorker.RequeueStuckProcessing(ctx, 5*time.Minute); err != nil {
+		// Lỗi tạm thời tự retry qua backoff (next_attempt_at); KHÔNG requeue mù 'failed'.
+		if err := stravaWorker.RequeueStuckProcessing(ctx, 2*time.Minute); err != nil {
 			log.Warn("requeue stuck processing", "err", err)
 		}
 
 		processed := 0
-		for {
+		// Cap vòng lặp (backstop) + KHÔNG 500 cả cron vì 1 lỗi: log rồi dừng,
+		// trả tiến độ. Event lỗi đã tự requeue/failed bên trong ProcessOnce.
+		for i := 0; i < 500; i++ {
 			n, err := stravaWorker.ProcessOnce(ctx)
 			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
+				log.Error("cron strava ProcessOnce", "err", err)
+				break
 			}
 			if n == 0 {
-				break // Queue empty
+				break // hết event đến hạn
 			}
 			processed += n
 		}
