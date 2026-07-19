@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState, useRef, lazy, Suspense, memo } from "react";
-import { Flame, Target, ShoppingBag, Wallet, Trophy, Gift, Ticket, Medal, Mountain, Footprints, User, LogOut, ChevronRight, Share2, Sparkles, RefreshCw, SlidersHorizontal, TrendingUp, Users, Heart } from "lucide-react";
+import { Flame, Target, ShoppingBag, Wallet, Trophy, Gift, Ticket, Medal, Mountain, Footprints, User, LogOut, ChevronRight, Share2, Sparkles, RefreshCw, SlidersHorizontal, TrendingUp, Users, Heart, Ribbon } from "lucide-react";
 import * as api from "./api.js";
-import { T, MONO, SPORTS, SOURCES, GOALS, CHARITIES, fmtP, daysLeft } from "./theme.js";
+import { T, MONO, SPORTS, SOURCES, CHARITIES, fmtP, daysLeft } from "./theme.js";
 import LeaderboardSheet from "./leaderboard-sheet.jsx";
+import CreateSheet from "./create-sheet.jsx";
+import DeliveryModal from "./delivery-modal.jsx";
 import { StreakCard, ActivityFeed } from "./activity-feed.jsx";
 import { NotificationToast, detectToastType } from "./notification.jsx";
 const AdminDashboard = lazy(() => import("./admin-dashboard.jsx"));
@@ -292,7 +294,7 @@ const ChallengeCard = memo(function ChallengeCard({ c, onJoin, onBoard, onShare 
         </div>
         <div className="min-w-0">
           <div className="text-[17px] font-bold leading-tight mb-1 flex flex-wrap items-center gap-1.5" style={{ color: T.text }}>
-            {c.is_charity && <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md text-glow select-none" style={{ background: "rgba(255, 51, 102, 0.15)", color: "#FF3366", border: "1px solid rgba(255, 51, 102, 0.3)" }}>🎗️ TỪ THIỆN</span>}
+            {c.is_charity && <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md text-glow select-none inline-flex items-center gap-1" style={{ background: "rgba(255, 51, 102, 0.15)", color: "#FF3366", border: "1px solid rgba(255, 51, 102, 0.3)" }}><Ribbon size={11} strokeWidth={2.5} /> TỪ THIỆN</span>}
             {c.title}
           </div>
           <div className="text-xs mb-1.5 font-medium" style={{ color: T.textDim }}>
@@ -456,7 +458,7 @@ function MyChallengeCard({ c, onSync, busy, onBoard, onShare }) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-[15px] font-bold leading-tight flex items-center gap-1.5 flex-wrap" style={{ color: T.text }}>
-            {c.is_charity && <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-pink-950/20 text-[#FF3366] border border-[#FF3366]/30 select-none">🎗️ TỪ THIỆN</span>}
+            {c.is_charity && <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-pink-950/20 text-[#FF3366] border border-[#FF3366]/30 select-none inline-flex items-center gap-1"><Ribbon size={10} strokeWidth={2.5} /> TỪ THIỆN</span>}
             {c.title}
           </div>
           <div className="text-xs" style={{ color: T.textDim }}>
@@ -588,251 +590,7 @@ function Row({ label, value, color }) {
   </div>;
 }
 
-// ===== Tạo kèo =====
-function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
-  const [sport, setSport] = useState("run");
-  const [goalType, setGoalType] = useState("daily_distance_km");
-  const [goal, setGoal] = useState(5);
-  const [stake, setStake] = useState(10);
-  const [source, setSource] = useState("strava");
-  const [maxParticipants, setMaxParticipants] = useState(10);
-  const [startAt, setStartAt] = useState(() => new Date().toISOString().split('T')[0]);
-  const [endAt, setEndAt] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 30);
-    return d.toISOString().split('T')[0];
-  });
-  const [isCharity, setIsCharity] = useState(false);
-  const [charityId, setCharityId] = useState(1001);
 
-  // Đồng bộ stake mặc định khi mở modal hoặc ví khả dụng thay đổi
-  useEffect(() => {
-    if (open && wallet?.available > 0) {
-      setStake(Math.min(200, Math.floor(wallet.available / 10) * 10 || 10));
-    } else {
-      setStake(10);
-    }
-  }, [wallet?.available, open]);
-
-  if (!open) return null;
-
-  const enough = wallet?.available >= stake;
-  const days = Math.max(1, Math.ceil((new Date(endAt) - new Date(startAt)) / 86400000));
-
-  // Validation client: mục tiêu > 0, số người là số nguyên ≥ 0 (0 = không giới hạn).
-  const goalNum = Number(goal);
-  const maxNum = Number(maxParticipants);
-  const invalidMsg =
-    !(goalNum > 0) ? "Mục tiêu phải lớn hơn 0."
-    : !(Number.isInteger(maxNum) && maxNum >= 0) ? "Số người tối đa phải là số nguyên ≥ 0 (0 = không giới hạn)."
-    : "";
-
-  const pickSport = (k) => {
-    setSport(k);
-    const gt = Object.entries(GOALS).find(([, v]) => v.sports.includes(k));
-    if (gt) {
-      setGoalType(gt[0]);
-      if (k === "walk") setGoal(10000);
-      else if (k === "run" || k === "bike") setGoal(5);
-      else if (k === "swim") setGoal(2);
-      else if (k === "gym") setGoal(3);
-    }
-  };
-
-  const handleStartAtChange = (val) => {
-    setStartAt(val);
-    if (new Date(endAt) <= new Date(val)) {
-      const d = new Date(val);
-      d.setDate(d.getDate() + 30);
-      setEndAt(d.toISOString().split('T')[0]);
-    }
-  };
-
-  const handleEndAtChange = (val) => {
-    if (new Date(val) <= new Date(startAt)) return;
-    setEndAt(val);
-  };
-
-  return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-sm rounded-3xl p-6 relative overflow-y-auto max-h-[85vh] scale-in" style={{ background: T.card, border: `1px solid ${T.line}` }} onClick={(e) => e.stopPropagation()}>
-        <div className="text-xl font-black mb-5 uppercase tracking-wider text-center" style={{ color: T.text }}>Tạo kèo mới</div>
-
-        <Label>Bộ môn</Label>
-        <div className="flex flex-wrap gap-2 mb-4">
-          {Object.entries(SPORTS).map(([k, v]) => {
-            const Icon = v.icon;
-            return (
-              <Chip key={k} active={sport === k} onClick={() => pickSport(k)}>
-                <span className="flex items-center gap-1.5"><Icon size={16} /> {v.label}</span>
-              </Chip>
-            );
-          })}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <div>
-            <Label>Mục tiêu ({GOALS[goalType]?.label || "đơn vị"})</Label>
-            <input type="number" inputMode="numeric" min="1" value={goal} onChange={(e) => setGoal(+e.target.value)}
-              className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
-              style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
-          </div>
-          <div>
-            <Label>Tối đa (người)</Label>
-            <input type="number" inputMode="numeric" min="0" value={maxParticipants} onChange={(e) => setMaxParticipants(+e.target.value)}
-              className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
-              style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-3.5 mb-4">
-          <div>
-            <Label>Ngày bắt đầu</Label>
-            <input type="date" value={startAt} onChange={(e) => handleStartAtChange(e.target.value)}
-              className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
-              style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
-          </div>
-          <div>
-            <Label>Ngày kết thúc</Label>
-            <input type="date" value={endAt} min={startAt} onChange={(e) => handleEndAtChange(e.target.value)}
-              className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none"
-              style={{ ...MONO, background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
-          </div>
-        </div>
-
-        <Label>Nguồn xác thực</Label>
-        <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
-          {Object.entries(SOURCES)
-            .filter(([k]) => k === "strava")
-            .map(([k, v]) => {
-              const Icon = v.icon;
-              return (
-                <Chip key={k} active={source === k} onClick={() => setSource(k)}>
-                  <span className="flex items-center gap-1.5"><Icon size={16} /> {v.label}</span>
-                </Chip>
-              );
-            })}
-        </div>
-
-        {/* Toggle Kèo Từ Thiện */}
-        <div className="flex items-center justify-between p-3.5 rounded-2xl mb-4" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
-          <div className="flex items-center gap-2">
-            <Heart size={16} className="animate-pulse" style={{ color: T.red }} />
-            <div>
-              <div className="text-xs font-bold" style={{ color: T.text }}>🎗️ Kèo Từ Thiện</div>
-              <div className="text-[10px]" style={{ color: T.textDim }}>Quyên góp cược thua vào quỹ</div>
-            </div>
-          </div>
-          <button 
-            onClick={() => setIsCharity(!isCharity)}
-            className="w-11 h-6 rounded-full transition-colors relative flex items-center px-0.5"
-            style={{ background: isCharity ? T.brand : T.line }}
-          >
-            <div 
-              className="w-5 h-5 rounded-full bg-white shadow-sm transition-transform"
-              style={{ transform: isCharity ? 'translateX(20px)' : 'translateX(0)' }}
-            />
-          </button>
-        </div>
-
-        {/* Danh sách Quỹ từ thiện */}
-        {isCharity && (
-          <div className="mb-4 p-3 rounded-2xl" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
-            <div className="text-xs font-bold mb-2" style={{ color: T.textDim }}>Chọn Quỹ quyên góp</div>
-            <div className="flex flex-col gap-2">
-              {Object.entries(CHARITIES).map(([k, v]) => (
-                <button
-                  key={k}
-                  onClick={() => setCharityId(Number(k))}
-                  className="flex items-start gap-2.5 p-2 rounded-xl text-left transition-all"
-                  style={{
-                    background: charityId === Number(k) ? T.card : 'transparent',
-                    border: charityId === Number(k) ? `1.5px solid ${v.color}` : `1px solid ${T.line}`
-                  }}
-                >
-                  <span className="text-lg mt-0.5">{v.logo}</span>
-                  <div>
-                    <div className="text-xs font-bold" style={{ color: charityId === Number(k) ? v.color : T.text }}>{v.name}</div>
-                    <div className="text-[10px]" style={{ color: T.textDim }}>{v.desc}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-            <div className="text-[9px] leading-relaxed font-bold mt-2 px-1 text-center" style={{ color: T.brand }}>
-              💡 Thắng hoàn cược, thua quyên góp 100% quỹ. Miễn phí nền tảng!
-            </div>
-          </div>
-        )}
-
-        <Label>Điểm cược mỗi người</Label>
-        <div className="rounded-2xl p-4 mb-5" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
-          <div className="flex justify-between items-center mb-2">
-            <div className="text-xs font-semibold" style={{ color: T.textDim }}>Số điểm cược:</div>
-            <div className="text-base font-black text-glow" style={{ ...MONO, color: T.brand }}>
-              {fmtP(stake)}
-            </div>
-          </div>
-          <input 
-            type="range" 
-            min="10" 
-            max={Math.max(10, wallet?.available || 0)} 
-            step="10"
-            value={stake} 
-            onChange={(e) => setStake(Number(e.target.value))}
-            disabled={!wallet?.available || wallet.available < 10}
-            className="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-[#CCFF00] focus:outline-none" 
-          />
-          <div className="flex justify-between text-[10px] font-bold mt-1.5" style={{ color: T.textDim }}>
-            <span>Min: 10</span>
-            <span>Ví khả dụng: {Number(wallet?.available || 0).toLocaleString("vi-VN")} pts</span>
-          </div>
-        </div>
-
-        {invalidMsg && (
-          <div className="text-xs font-semibold mb-3 px-3 py-2 rounded-lg" role="alert" aria-live="polite"
-            style={{ background: "rgba(255,59,48,0.1)", color: T.red, border: `1px solid ${T.red}33` }}>
-            {invalidMsg}
-          </div>
-        )}
-        {enough ? (
-          <button disabled={busy || !!invalidMsg}
-            onClick={() => onCreate({
-              title: `${SPORTS[sport].label} ${goalNum.toLocaleString("vi-VN")} ${GOALS[goalType]?.label || ""}`,
-              sport, goal_type: goalType, goal_value: goalNum, source,
-              stake_points: stake, duration_days: days, max_participants: maxNum,
-              start_at: startAt,
-              is_charity: isCharity,
-              charity_id: isCharity ? charityId : 0,
-            })}
-            className="w-full py-3.5 rounded-2xl font-bold text-[15px] active:scale-[.98] transition-transform"
-            style={{ background: T.brand, color: T.bg, opacity: busy || invalidMsg ? 0.5 : 1 }}>
-            {busy ? "Đang tạo..." : `Tạo kèo · cược ${fmtP(stake)}`}
-          </button>
-        ) : (
-          <button onClick={() => { onClose(); setTab("wallet"); }}
-            className="w-full font-bold py-3.5 rounded-2xl text-[15px] text-center active:scale-[.98] transition-transform"
-            style={{ background: T.red, color: T.text, boxShadow: "0 0 15px rgba(255, 59, 48, 0.4)" }}>
-            Không đủ điểm — Nạp thêm ở tab Ví ⭐
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-const Label = ({ children }) => (
-  <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{ color: T.textDim }}>{children}</div>
-);
-const Chip = ({ active, onClick, children }) => (
-  <button onClick={onClick} className="px-3.5 py-2 rounded-xl text-[13px] font-bold transition-all border shrink-0"
-    style={{ 
-      background: active ? "rgba(204,255,0,0.1)" : T.bg, 
-      borderColor: active ? T.brand : T.line,
-      color: active ? T.brand : T.textDim 
-    }}>
-    {children}
-  </button>
-);
 
 function getRedemptionStatusBadge(status) {
   const mapping = {
@@ -1142,13 +900,13 @@ function AppCore({ userProfile, onLogout }) {
                 <div className="rounded-3xl p-5 mb-6 text-left relative overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
                   <div className="flex items-center gap-2 mb-3">
                     <Heart size={16} className="animate-pulse" style={{ color: T.red }} />
-                    <div className="text-xs font-bold uppercase tracking-wider" style={{ color: T.text }}>🎗️ Quỹ Cộng Đồng</div>
+                    <div className="text-xs font-bold uppercase tracking-wider inline-flex items-center gap-1.5" style={{ color: T.text }}><Ribbon size={13} strokeWidth={2.5} style={{ color: T.red }} /> Quỹ Cộng Đồng</div>
                   </div>
                   <div className="flex flex-col gap-2">
                     {Object.entries(CHARITIES).map(([k, v]) => (
                       <div key={k} className="flex items-center justify-between p-3 rounded-2xl" style={{ background: T.paper, border: `1px solid ${T.line}` }}>
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <span className="text-lg shrink-0">{v.logo}</span>
+                          <span className="shrink-0"><v.Icon size={20} strokeWidth={2} style={{ color: v.color }} /></span>
                           <div className="min-w-0">
                             <div className="text-xs font-bold truncate" style={{ color: T.text }} title={v.name}>{v.name}</div>
                             <div className="text-[9px] truncate" style={{ color: T.textDim }} title={v.desc}>{v.desc}</div>
@@ -1499,79 +1257,6 @@ const Empty = ({ children }) => (
   <div className="rounded-2xl p-8 text-center text-sm" style={{ background: T.card, color: T.textDim }}>{children}</div>
 );
 
-function DeliveryModal({ item, busy, onClose, onConfirm }) {
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [address, setAddress] = useState("");
-  const [note, setNote] = useState("");
-  const [err, setErr] = useState("");   // lỗi validation inline thay cho alert() native
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!name.trim() || !phone.trim() || !address.trim()) {
-      setErr("Vui lòng điền đầy đủ Họ tên, Số điện thoại và Địa chỉ nhận hàng.");
-      return;
-    }
-    setErr("");
-    onConfirm({ name, phone, address, note });
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
-      <form className="w-full max-w-sm rounded-3xl p-6 relative overflow-y-auto max-h-[85vh] scale-in" 
-        style={{ background: T.card, border: `1px solid ${T.line}` }} 
-        onClick={e => e.stopPropagation()} onSubmit={handleSubmit}>
-        <h2 className="text-xl font-black mb-4 uppercase tracking-wider text-center" style={{ color: T.text }}>Thông tin giao hàng</h2>
-        <div className="text-sm font-semibold mb-4 text-center" style={{ color: T.brand }}>
-          Đổi quà: {item.name} ({Number(item.cost).toLocaleString("vi-VN")} ⭐)
-        </div>
-
-        <Label>Họ tên người nhận</Label>
-        <input type="text" value={name} onChange={e => setName(e.target.value)} required
-          placeholder="Nhập họ và tên"
-          className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none mb-3"
-          style={{ ...MONO, background: T.bg, color: T.text, border: `1px solid ${T.line}` }} />
-
-        <Label>Số điện thoại</Label>
-        <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} required
-          placeholder="Nhập số điện thoại"
-          className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none mb-3"
-          style={{ ...MONO, background: T.bg, color: T.text, border: `1px solid ${T.line}` }} />
-
-        <Label>Địa chỉ nhận hàng</Label>
-        <textarea value={address} onChange={e => setAddress(e.target.value)} required rows={3}
-          placeholder="Số nhà, tên đường, phường/xã, quận/huyện, tỉnh/thành phố"
-          className="w-full px-3 py-2 rounded-xl text-sm font-semibold outline-none mb-3 resize-none"
-          style={{ background: T.bg, color: T.text, border: `1px solid ${T.line}` }} />
-
-        <Label>Ghi chú thêm (Size, mùi hương, v.v.)</Label>
-        <input type="text" value={note} onChange={e => setNote(e.target.value)}
-          placeholder="Ví dụ: Size M, Mùi hương Bạc Hà"
-          className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none mb-5"
-          style={{ ...MONO, background: T.bg, color: T.text, border: `1px solid ${T.line}` }} />
-
-        {err && (
-          <div className="text-xs font-semibold mb-3 px-3 py-2 rounded-lg" role="alert" aria-live="polite"
-            style={{ background: "rgba(255,59,48,0.1)", color: T.red, border: `1px solid ${T.red}33` }}>
-            {err}
-          </div>
-        )}
-        <div className="flex gap-3">
-          <button type="button" onClick={onClose} disabled={busy}
-            className="flex-1 py-3 rounded-xl font-bold text-xs uppercase tracking-widest text-center active:scale-[.98] transition-transform"
-            style={{ background: "rgba(255,255,255,0.05)", border: `1px solid ${T.line}`, color: T.textDim }}>
-            Hủy
-          </button>
-          <button type="submit" disabled={busy}
-            className="flex-1 py-3 rounded-xl font-bold text-xs uppercase tracking-widest text-center btn-neon active:scale-[.98] transition-transform"
-            style={{ background: T.brand, color: T.bg, opacity: busy ? 0.6 : 1 }}>
-            Xác nhận đổi
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
 
 function txnLabel(t) {
   const names = {

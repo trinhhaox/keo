@@ -1,6 +1,6 @@
 // theme.js — design tokens + từ điển hiển thị dùng chung giữa các màn.
 
-import { Footprints, Zap, Waves, Bike, Dumbbell, Trophy, Activity, HeartPulse, Smartphone } from "lucide-react";
+import { Footprints, Zap, Waves, Bike, Dumbbell, Trophy, Activity, HeartPulse, Smartphone, Smile, TreePine, Sprout } from "lucide-react";
 
 export const T = {
   bg: "#090B0E", bgDim: "#101318", paper: "#161920", card: "#1B1F27",
@@ -35,7 +35,7 @@ export const fmtP = (n) => Number(n).toLocaleString("vi-VN") + " điểm";
 export const daysLeft = (endAt) => Math.max(0, Math.ceil((new Date(endAt) - Date.now()) / 86400000));
 
 export const CHARITIES = {
-  1001: { name: "Quỹ Phẫu Thuật Nụ Cười", desc: "Operation Smile - Phẫu thuật hàm ếch miễn phí cho trẻ em.", color: "#FF3366", logo: "👄" },
-  1002: { name: "Quỹ Gieo Mầm Xanh", desc: "Trồng rừng phòng hộ và phủ xanh các khu bảo tồn thiên nhiên.", color: "#33CC66", logo: "🌳" },
-  1003: { name: "Quỹ Run Organic", desc: "Phát triển nông nghiệp hữu cơ và lối sống thể thao bền vững.", color: "#A8E6CF", logo: "🌱" }
+  1001: { name: "Quỹ Phẫu Thuật Nụ Cười", desc: "Operation Smile - Phẫu thuật hàm ếch miễn phí cho trẻ em.", color: "#FF3366", Icon: Smile },
+  1002: { name: "Quỹ Gieo Mầm Xanh", desc: "Trồng rừng phòng hộ và phủ xanh các khu bảo tồn thiên nhiên.", color: "#33CC66", Icon: TreePine },
+  1003: { name: "Quỹ Run Organic", desc: "Phát triển nông nghiệp hữu cơ và lối sống thể thao bền vững.", color: "#A8E6CF", Icon: Sprout }
 };

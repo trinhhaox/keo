@@ -396,17 +396,19 @@ export default function AdminDashboard({ showToast }) {
                   <div className="flex gap-1.5 shrink-0">
                     <button
                       onClick={() => openEditItem(item)}
-                      className="p-2 rounded-xl border transition-all active:scale-95"
-                      style={{ background: T.bg, borderColor: T.line, color: T.text }}
+                      aria-label={`Sửa ${item.name}`}
+                      className="rounded-xl border transition-all active:scale-95 flex items-center justify-center"
+                      style={{ background: T.bg, borderColor: T.line, color: T.text, minWidth: 44, minHeight: 44 }}
                     >
-                      <Edit2 size={13} />
+                      <Edit2 size={16} />
                     </button>
                     <button
                       onClick={() => handleDeleteShopItem(item.id, item.name)}
-                      className="p-2 rounded-xl border transition-all active:scale-95"
-                      style={{ background: "rgba(255,59,48,0.05)", borderColor: "rgba(255,59,48,0.2)", color: T.red }}
+                      aria-label={`Xóa ${item.name}`}
+                      className="rounded-xl border transition-all active:scale-95 flex items-center justify-center"
+                      style={{ background: "rgba(255,59,48,0.05)", borderColor: "rgba(255,59,48,0.2)", color: T.red, minWidth: 44, minHeight: 44 }}
                     >
-                      <Trash2 size={13} />
+                      <Trash2 size={16} />
                     </button>
                   </div>
                 </div>
