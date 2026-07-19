@@ -948,10 +948,10 @@ function AppCore({ userProfile, onLogout }) {
                           }
                         }}
                         className="shrink-0 text-xs font-bold px-3 py-2 rounded-full active:scale-95 transition-transform"
-                        style={{ 
-                          ...MONO, 
-                          background: enough ? T.brand : "rgba(255,59,48,0.1)", 
-                          color: enough ? T.ink : T.red,
+                        style={{
+                          ...MONO,
+                          background: enough ? T.brand : "rgba(255,59,48,0.1)",
+                          color: enough ? T.bg : T.red,
                           border: enough ? "none" : `1px solid rgba(255,59,48,0.2)`
                         }}>
                         {Number(i.cost).toLocaleString("vi-VN")} điểm
