@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: Gọi cron drain hàng đợi Strava
         run: |
-          code=$(curl -s -m 90 -o /tmp/out.txt -w "%{http_code}" https://keo-seven.vercel.app/api/cron/strava || echo "000")
+          code=$(curl -s -m 90 -o /tmp/out.txt -w "%{http_code}" https://app.xox.vn/api/cron/strava || echo "000")
           echo "HTTP $code"
           cat /tmp/out.txt || true
           # Không fail workflow vì lỗi tạm thời (event đã tự requeue/failed trong endpoint);
