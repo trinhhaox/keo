@@ -1301,6 +1301,13 @@ const Empty = ({ children }) => (
 
 
 function txnLabel(t) {
+  // Thưởng: tách rõ check-in vs tập luyện (cùng ledger type reward_payout,
+  // phân biệt bằng reward_kind từ BE).
+  if (t.type === "reward_payout") {
+    if (t.reward_kind === "checkin") return "Thưởng check-in";
+    if (t.reward_kind === "activity_distance") return "Thưởng tập luyện";
+    return "Thưởng luyện tập";
+  }
   const names = {
     purchase: "Nạp điểm",
     stake_lock: "Đặt cược kèo",
@@ -1308,7 +1315,6 @@ function txnLabel(t) {
     redeem: "Đổi quà",
     stake_release: "Hoàn cược",
     admin_adjust: "Admin điều chỉnh",
-    reward_payout: "Thưởng luyện tập",
     challenge_reward: "Thưởng thử thách",
   };
   return names[t.type] || t.type;

@@ -182,15 +182,20 @@ func (s *Server) getWallet(w http.ResponseWriter, r *http.Request, userID int64)
 }
 
 func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, userID int64) {
+	// reward_kind: phân biệt thưởng check-in vs thưởng tập luyện. Cả hai đều là
+	// ledger txn 'reward_payout', chỉ khác reward_events.kind — JOIN qua ref
+	// 'event=<id>' trong metadata (bao cả giao dịch cũ, không cần đổi reward service).
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT t.id, t.type, t.created_at,
 		       COALESCE(SUM(e.amount) FILTER (WHERE a.type = 'user_available'), 0) AS delta_available,
-		       COALESCE(SUM(e.amount) FILTER (WHERE a.type = 'user_locked'), 0)    AS delta_locked
+		       COALESCE(SUM(e.amount) FILTER (WHERE a.type = 'user_locked'), 0)    AS delta_locked,
+		       COALESCE(re.kind, '') AS reward_kind
 		FROM ledger_transactions t
 		JOIN ledger_entries e ON e.txn_id = t.id
 		JOIN ledger_accounts a ON a.id = e.account_id
+		LEFT JOIN reward_events re ON re.id = NULLIF(substring(t.metadata->>'ref' FROM 'event=(\d+)'), '')::bigint
 		WHERE a.user_id = $1
-		GROUP BY t.id, t.type, t.created_at
+		GROUP BY t.id, t.type, t.created_at, re.kind
 		ORDER BY t.id DESC LIMIT 50`,
 		userID,
 	)
@@ -205,11 +210,12 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, userID 
 		CreatedAt      time.Time `json:"created_at"`
 		DeltaAvailable int64     `json:"delta_available"`
 		DeltaLocked    int64     `json:"delta_locked"`
+		RewardKind     string    `json:"reward_kind"`
 	}
 	out := []txn{}
 	for rows.Next() {
 		var t txn
-		if err := rows.Scan(&t.ID, &t.Type, &t.CreatedAt, &t.DeltaAvailable, &t.DeltaLocked); err != nil {
+		if err := rows.Scan(&t.ID, &t.Type, &t.CreatedAt, &t.DeltaAvailable, &t.DeltaLocked, &t.RewardKind); err != nil {
 			httpError(w, http.StatusInternalServerError, "scan")
 			return
 		}
