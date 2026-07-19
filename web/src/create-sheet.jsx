@@ -4,6 +4,18 @@ import { T, MONO, SPORTS, GOALS, SOURCES, CHARITIES, fmtP } from "./theme.js";
 import { Heart, Ribbon } from "lucide-react";
 import { Label, Chip } from "./ui-primitives.jsx";
 
+// Bước nhảy TRÒN thích ứng theo quy mô ví — để kéo slider luôn dừng ở số tròn
+// (10k/50k/100k/150k/200k…) thay vì số lẻ. Ví càng lớn bước càng lớn.
+function stakeStepFor(avail) {
+  return avail >= 1_000_000 ? 10_000
+    : avail >= 200_000 ? 5_000
+    : avail >= 20_000 ? 1_000
+    : avail >= 2_000 ? 100
+    : 10;
+}
+// Rút gọn mốc điểm cho nút chọn nhanh: 50K, 200K, 1M…
+const shortStake = (n) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
+
 export default function CreateSheet({ open, busy, onClose, onCreate, wallet, setTab }) {
   const [sport, setSport] = useState("run");
   const [goalType, setGoalType] = useState("daily_distance_km");
@@ -21,10 +33,15 @@ export default function CreateSheet({ open, busy, onClose, onCreate, wallet, set
   const [charityId, setCharityId] = useState(1001);
   const [title, setTitle] = useState(""); // tên kèo tuỳ chọn; rỗng → tự sinh từ bộ môn+mục tiêu
 
-  // Đồng bộ stake mặc định khi mở modal hoặc ví khả dụng thay đổi
+  // Đồng bộ stake mặc định khi mở modal hoặc ví khả dụng thay đổi — làm tròn
+  // theo bước, mặc định ~100k (hoặc 10 bước) kẹp trong [step, max tròn].
   useEffect(() => {
-    if (open && wallet?.available > 0) {
-      setStake(Math.min(200, Math.floor(wallet.available / 10) * 10 || 10));
+    const avail = Math.floor(wallet?.available || 0);
+    if (open && avail >= 10) {
+      const step = stakeStepFor(avail);
+      const maxRound = Math.max(step, Math.floor(avail / step) * step);
+      const desired = Math.min(100_000, step * 10);
+      setStake(Math.min(maxRound, Math.max(step, Math.round(desired / step) * step)));
     } else {
       setStake(10);
     }
@@ -33,6 +50,10 @@ export default function CreateSheet({ open, busy, onClose, onCreate, wallet, set
   if (!open) return null;
 
   const enough = wallet?.available >= stake;
+  const avail = Math.floor(wallet?.available || 0);
+  const stakeStep = stakeStepFor(Math.max(10, avail));
+  const stakeMax = Math.max(stakeStep, Math.floor(avail / stakeStep) * stakeStep);
+  const stakePresets = [50_000, 100_000, 200_000, 500_000, 1_000_000].filter(v => v >= stakeStep && v <= stakeMax);
   const days = Math.max(1, Math.ceil((new Date(endAt) - new Date(startAt)) / 86400000));
 
   // Validation client: mục tiêu > 0, số người là số nguyên ≥ 0 (0 = không giới hạn).
@@ -195,20 +216,45 @@ export default function CreateSheet({ open, busy, onClose, onCreate, wallet, set
               {fmtP(stake)}
             </div>
           </div>
+          {/* Nút chọn nhanh các mốc tròn + Tối đa */}
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {stakePresets.map(v => (
+              <button key={v} type="button" onClick={() => setStake(v)}
+                className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all border"
+                style={{
+                  background: stake === v ? "rgba(204,255,0,0.12)" : T.card,
+                  borderColor: stake === v ? T.brand : T.line,
+                  color: stake === v ? T.brand : T.textDim,
+                }}>
+                {shortStake(v)}
+              </button>
+            ))}
+            {stakeMax > 0 && (
+              <button type="button" onClick={() => setStake(stakeMax)}
+                className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all border"
+                style={{
+                  background: stake === stakeMax ? "rgba(204,255,0,0.12)" : T.card,
+                  borderColor: stake === stakeMax ? T.brand : T.line,
+                  color: stake === stakeMax ? T.brand : T.textDim,
+                }}>
+                Tối đa
+              </button>
+            )}
+          </div>
           <input
             type="range"
-            min="10"
-            max={Math.max(10, wallet?.available || 0)}
-            step="10"
-            value={stake}
+            min={stakeStep}
+            max={Math.max(stakeStep, stakeMax)}
+            step={stakeStep}
+            value={Math.min(Math.max(stake, stakeStep), stakeMax)}
             onChange={(e) => setStake(Number(e.target.value))}
             disabled={!wallet?.available || wallet.available < 10}
             aria-label="Số điểm cược"
             className="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-[#CCFF00] focus:outline-none"
           />
           <div className="flex justify-between text-[10px] font-bold mt-1.5" style={{ color: T.textDim }}>
-            <span>Min: 10</span>
-            <span>Ví khả dụng: {Number(wallet?.available || 0).toLocaleString("vi-VN")} pts</span>
+            <span>Bước {stakeStep.toLocaleString("vi-VN")}</span>
+            <span>Ví: {avail.toLocaleString("vi-VN")} pts</span>
           </div>
         </div>
 
