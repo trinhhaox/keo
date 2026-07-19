@@ -19,6 +19,7 @@ export default function CreateSheet({ open, busy, onClose, onCreate, wallet, set
   });
   const [isCharity, setIsCharity] = useState(false);
   const [charityId, setCharityId] = useState(1001);
+  const [title, setTitle] = useState(""); // tên kèo tuỳ chọn; rỗng → tự sinh từ bộ môn+mục tiêu
 
   // Đồng bộ stake mặc định khi mở modal hoặc ví khả dụng thay đổi
   useEffect(() => {
@@ -72,6 +73,12 @@ export default function CreateSheet({ open, busy, onClose, onCreate, wallet, set
     <div className="fixed inset-0 z-30 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
       <div className="w-full max-w-sm rounded-3xl p-6 relative overflow-y-auto max-h-[85vh] scale-in" style={{ background: T.card, border: `1px solid ${T.line}` }} onClick={(e) => e.stopPropagation()}>
         <div className="text-xl font-black mb-5 uppercase tracking-wider text-center" style={{ color: T.text }}>Tạo kèo mới</div>
+
+        <Label htmlFor="ck-title">Tên kèo (tuỳ chọn)</Label>
+        <input id="ck-title" type="text" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={60}
+          placeholder="Ví dụ: Chạy bộ mỗi sáng cùng team"
+          className="w-full px-3 py-3 rounded-xl text-sm font-bold outline-none mb-4"
+          style={{ background: T.card, color: T.text, border: `1px solid ${T.line}` }} />
 
         <Label>Bộ môn</Label>
         <div className="flex flex-wrap gap-2 mb-4">
@@ -214,7 +221,7 @@ export default function CreateSheet({ open, busy, onClose, onCreate, wallet, set
         {enough ? (
           <button disabled={busy || !!invalidMsg}
             onClick={() => onCreate({
-              title: `${SPORTS[sport].label} ${goalNum.toLocaleString("vi-VN")} ${GOALS[goalType]?.label || ""}`,
+              title: title.trim() || `${SPORTS[sport].label} ${goalNum.toLocaleString("vi-VN")} ${GOALS[goalType]?.label || ""}`,
               sport, goal_type: goalType, goal_value: goalNum, source,
               stake_points: stake, duration_days: days, max_participants: maxNum,
               start_at: startAt,

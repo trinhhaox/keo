@@ -221,17 +221,25 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, userID 
 // ===== Kèo =====
 
 func (s *Server) listChallenges(w http.ResponseWriter, r *http.Request, userID int64) {
+	// Trả cả 3 nhóm trạng thái (mở/đang chạy/kết thúc) cho FE nhóm hiển thị.
+	// ORDER ưu tiên open→active/grace→ended để kèo còn tham gia được luôn ở đầu,
+	// không bị kèo cũ đã kết thúc đẩy khỏi LIMIT. Kèm tên + cờ chủ kèo.
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT c.id, c.title, c.sport, c.goal_type, c.goal_value, c.source,
 		       c.stake_points, c.start_at, c.end_at, c.status,
 		       COUNT(e.id) AS participants,
 		       COUNT(e.id) FILTER (WHERE e.user_id = $1) > 0 AS joined,
-		       c.max_participants, c.is_charity, c.charity_id
+		       c.max_participants, c.is_charity, c.charity_id,
+		       u.display_name AS creator_name,
+		       c.creator_id = $1 AS is_owner
 		FROM challenges c
+		JOIN users u ON u.id = c.creator_id
 		LEFT JOIN enrollments e ON e.challenge_id = c.id
-		WHERE c.status IN ('open', 'active')
-		GROUP BY c.id
-		ORDER BY c.created_at DESC LIMIT 50`,
+		WHERE c.status IN ('open', 'active', 'grace', 'settling', 'settled')
+		GROUP BY c.id, u.display_name
+		ORDER BY (CASE c.status WHEN 'open' THEN 0 WHEN 'active' THEN 1 WHEN 'grace' THEN 1 ELSE 2 END),
+		         c.created_at DESC
+		LIMIT 50`,
 		userID,
 	)
 	if err != nil {
@@ -255,13 +263,16 @@ func (s *Server) listChallenges(w http.ResponseWriter, r *http.Request, userID i
 		MaxParticipants int64     `json:"max_participants"`
 		IsCharity       bool      `json:"is_charity"`
 		CharityID       int64     `json:"charity_id"`
+		CreatorName     string    `json:"creator_name"`
+		IsOwner         bool      `json:"is_owner"`
 	}
 	out := []item{}
 	for rows.Next() {
 		var it item
 		if err := rows.Scan(&it.ID, &it.Title, &it.Sport, &it.GoalType, &it.GoalValue,
 			&it.Source, &it.StakePoints, &it.StartAt, &it.EndAt, &it.Status,
-			&it.Participants, &it.Joined, &it.MaxParticipants, &it.IsCharity, &it.CharityID); err != nil {
+			&it.Participants, &it.Joined, &it.MaxParticipants, &it.IsCharity, &it.CharityID,
+			&it.CreatorName, &it.IsOwner); err != nil {
 			httpError(w, http.StatusInternalServerError, "scan")
 			return
 		}

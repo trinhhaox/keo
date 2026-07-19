@@ -300,9 +300,14 @@ const ChallengeCard = memo(function ChallengeCard({ c, onJoin, onBoard, onShare 
           <div className="text-xs mb-1.5 font-medium" style={{ color: T.textDim }}>
             Thời gian: <span className="font-semibold text-white">{new Date(c.start_at).toLocaleDateString("vi-VN", {day:"2-digit",month:"2-digit"})}</span> - <span className="font-semibold text-white">{new Date(c.end_at).toLocaleDateString("vi-VN", {day:"2-digit",month:"2-digit"})}</span>
           </div>
-          <div className="text-xs mb-2 font-medium" style={{ color: T.textDim }}>
+          <div className="text-xs mb-1.5 font-medium" style={{ color: T.textDim }}>
             còn <span style={{ color: T.text }}>{daysLeft(c.end_at)}</span> ngày · <span style={{ color: T.text }}>{c.participants}{c.max_participants > 0 ? `/${c.max_participants}` : ""}</span> người tham gia
           </div>
+          {c.creator_name && (
+            <div className="text-xs mb-2 font-medium flex items-center gap-1" style={{ color: T.textDim }}>
+              <User size={12} strokeWidth={2.5} /> Chủ kèo: <span className="font-semibold" style={{ color: c.is_owner ? T.brand : T.text }}>{c.creator_name}{c.is_owner ? " (bạn)" : ""}</span>
+            </div>
+          )}
           <div className="flex flex-wrap gap-1.5 items-center mt-2">
             <SourceBadge source={c.source} />
             <ChallengeStatusBadge startAt={c.start_at} endAt={c.end_at} />
@@ -332,10 +337,16 @@ const ChallengeCard = memo(function ChallengeCard({ c, onJoin, onBoard, onShare 
                 title="Chia sẻ & mời bạn bè">
                 <Share2 size={16} />
               </button>
-              {c.joined
-                ? <span className="inline-block text-xs font-bold px-4 py-2.5 rounded-xl border" style={{ background: T.bg, color: T.textDim, borderColor: T.line }}>Đã tham gia</span>
-                : <button onClick={(e) => { e.stopPropagation(); onJoin(c); }} className="btn-neon text-sm font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
-                    style={{ background: T.brand, color: T.bg }}>Vào kèo</button>}
+              {c.joined ? (
+                <span className="inline-block text-xs font-bold px-4 py-2.5 rounded-xl border" style={{ background: T.bg, color: T.textDim, borderColor: T.line }}>Đã tham gia</span>
+              ) : c.status === "open" ? (
+                <button onClick={(e) => { e.stopPropagation(); onJoin(c); }} className="btn-neon text-sm font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
+                  style={{ background: T.brand, color: T.bg }}>Vào kèo</button>
+              ) : (
+                <span className="inline-block text-xs font-bold px-4 py-2.5 rounded-xl border" style={{ background: T.bg, color: T.textDim, borderColor: T.line }}>
+                  {c.status === "active" || c.status === "grace" ? "Đang chạy" : "Đã kết thúc"}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -769,10 +780,24 @@ function AppCore({ userProfile, onLogout }) {
     .sort((a, b) => {
       if (sortKey === "pot") return (b.stake_points * b.participants) - (a.stake_points * a.participants);
       if (sortKey === "participants") return b.participants - a.participants;
-      return 0; // default: server order
+      return 0; // default: server order (đã ưu tiên open→running→ended)
     });
 
-  const totalPot = challenges.reduce((s, c) => s + c.stake_points * c.participants, 0);
+  // Nhóm theo trạng thái để hiển thị 3 mục ở tab Khám phá.
+  const CHALLENGE_GROUPS = [
+    { key: "open", label: "Kèo đang mở", statuses: ["open"] },
+    { key: "running", label: "Kèo đang chạy", statuses: ["active", "grace"] },
+    { key: "ended", label: "Kèo đã kết thúc", statuses: ["settling", "settled"] },
+  ];
+  const challengeGroups = CHALLENGE_GROUPS.map(g => ({
+    ...g,
+    items: filteredChallenges.filter(c => g.statuses.includes(c.status)),
+  }));
+
+  // Quỹ "đang treo" chỉ tính kèo còn mở/đang chạy (kèo kết thúc đã chốt sổ).
+  const totalPot = challenges
+    .filter(c => c.status === "open" || c.status === "active" || c.status === "grace")
+    .reduce((s, c) => s + c.stake_points * c.participants, 0);
 
   return (
     <div className="min-h-screen flex justify-center selection:bg-lime-500/30" style={{ background: "#050505", fontFamily: "'Outfit', sans-serif" }}>
@@ -841,11 +866,6 @@ function AppCore({ userProfile, onLogout }) {
                 {/* Filter & Sort */}
                 <FilterBar sportFilter={sportFilter} setSportFilter={setSportFilter} sortKey={sortKey} setSortKey={setSortKey} />
 
-                <div className="text-sm font-bold mb-4 uppercase tracking-widest flex items-center justify-between" style={{ color: T.textDim }}>
-                  <span>Kèo đang mở</span>
-                  {sportFilter && <span className="text-xs normal-case font-semibold" style={{ color: T.brand }}>{filteredChallenges.length} kèo</span>}
-                </div>
-
                 {loading ? (
                   <>{[0,1,2].map(i => <SkeletonChallengeCard key={i} />)}</>
                 ) : filteredChallenges.length === 0 ? (
@@ -858,11 +878,21 @@ function AppCore({ userProfile, onLogout }) {
                       {sportFilter ? "Thử xem tất cả bộ môn hoặc tạo kèo mới!" : 'Bấm "+ Tạo kèo" để mở kèo đầu tiên!'}
                     </div>
                   </div>
-                ) : filteredChallenges.map((c, i) => (
-                  <div key={c.id} style={{ animationDelay: `${i * 50}ms` }}>
-                    <ChallengeCard c={c} onJoin={setJoining} onBoard={setBoard} onShare={handleShare} />
-                  </div>
-                ))}
+                ) : (
+                  challengeGroups.filter(g => g.items.length > 0).map(g => (
+                    <div key={g.key} className="mb-2">
+                      <div className="text-sm font-bold mb-4 uppercase tracking-widest flex items-center justify-between" style={{ color: T.textDim }}>
+                        <span>{g.label}</span>
+                        <span className="text-xs normal-case font-semibold" style={{ color: T.brand }}>{g.items.length} kèo</span>
+                      </div>
+                      {g.items.map((c, i) => (
+                        <div key={c.id} style={{ animationDelay: `${i * 50}ms` }}>
+                          <ChallengeCard c={c} onJoin={setJoining} onBoard={setBoard} onShare={handleShare} />
+                        </div>
+                      ))}
+                    </div>
+                  ))
+                )}
               </div>
             )}
 
