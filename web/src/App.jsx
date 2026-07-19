@@ -496,11 +496,8 @@ function MyChallengeCard({ c, onSync, busy, onBoard, onShare }) {
         )}
       </div>
 
-      {!settled && (c.source === "strava" ? (
-        <div className="rounded-xl px-3 py-2.5 mb-3 text-[11px] font-semibold" style={{ background: "rgba(252,76,2,0.12)", color: T.strava, border: `1px solid ${T.strava}33` }}>
-          ⚡ Hoạt động Strava được đồng bộ tự động — không cần thao tác thủ công
-        </div>
-      ) : (
+      {/* Nguồn Strava tự đồng bộ (không hiện gì); nguồn khác cần nút đồng bộ. */}
+      {!settled && c.source !== "strava" && (
         <div className="flex items-center justify-between rounded-xl px-3 py-2.5 mb-3" style={{ background: T.card }}>
           <div className="text-[12px] font-semibold" style={{ color: T.text }}>
             Dữ liệu từ {SOURCES[c.source]?.label || c.source}
@@ -511,7 +508,7 @@ function MyChallengeCard({ c, onSync, busy, onBoard, onShare }) {
             ⟳ Đồng bộ (demo)
           </button>
         </div>
-      ))}
+      )}
 
       <div className="relative h-4 rounded-full overflow-hidden mb-2" style={{ background: T.card }}>
         <div className="absolute inset-y-0 left-0 rounded-full transition-all duration-700"
@@ -793,6 +790,12 @@ function AppCore({ userProfile, onLogout }) {
     ...g,
     items: filteredChallenges.filter(c => g.statuses.includes(c.status)),
   }));
+  // Tab "Của tôi": nhóm theo vòng đời kèo (challenge_status), không phải trạng
+  // thái enrollment.
+  const myChallengeGroups = CHALLENGE_GROUPS.map(g => ({
+    ...g,
+    items: mine.filter(c => g.statuses.includes(c.challenge_status)),
+  }));
 
   // Quỹ "đang treo" chỉ tính kèo còn mở/đang chạy (kèo kết thúc đã chốt sổ).
   const totalPot = challenges
@@ -905,7 +908,6 @@ function AppCore({ userProfile, onLogout }) {
                   + Tạo kèo mới
                 </button>
 
-                <div className="text-sm font-bold mb-4 uppercase tracking-widest" style={{ color: T.textDim }}>Kèo của tôi ({mine.length})</div>
                 {loading ? (
                   <>{[0,1].map(i => <SkeletonMyCard key={i} />)}</>
                 ) : mine.length === 0 ? (
@@ -914,12 +916,22 @@ function AppCore({ userProfile, onLogout }) {
                     <div className="text-sm font-semibold mb-1" style={{ color: T.text }}>Chưa có kèo nào</div>
                     <div className="text-xs" style={{ color: T.textDim }}>Qua tab Khám phá để chọn thử thách!</div>
                   </div>
-                ) : mine.map((c) => (
-                  <MyChallengeCard key={c.challenge_id} c={c} busy={busy} onBoard={setBoard} onShare={handleShare}
-                    onSync={(mc) => act(
-                      () => api.syncHealthDemo(mc.source, mc.sport, mc.goal_type, mc.goal_value),
-                      "Đã đồng bộ dữ liệu hôm nay qua /v1/health-sync ✓", "success")} />
-                ))}
+                ) : (
+                  myChallengeGroups.filter(g => g.items.length > 0).map(g => (
+                    <div key={g.key} className="mb-2">
+                      <div className="text-sm font-bold mb-4 uppercase tracking-widest flex items-center justify-between" style={{ color: T.textDim }}>
+                        <span>{g.label}</span>
+                        <span className="text-xs normal-case font-semibold" style={{ color: T.brand }}>{g.items.length} kèo</span>
+                      </div>
+                      {g.items.map((c) => (
+                        <MyChallengeCard key={c.challenge_id} c={c} busy={busy} onBoard={setBoard} onShare={handleShare}
+                          onSync={(mc) => act(
+                            () => api.syncHealthDemo(mc.source, mc.sport, mc.goal_type, mc.goal_value),
+                            "Đã đồng bộ dữ liệu hôm nay qua /v1/health-sync ✓", "success")} />
+                      ))}
+                    </div>
+                  ))
+                )}
                 <div className="mt-8"><ActivityFeed activities={acts} /></div>
               </div>
             )}
