@@ -1,10 +1,14 @@
-# Lệnh chạy Production: docker compose -f docker-compose.prod.yml up -d
+# Production trên VPS (Ubuntu):
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Caddy lo TLS + domain: tự xin & gia hạn Let's Encrypt cho ro.xox.vn.
+# App KHÔNG expose cổng ra host — chỉ Caddy nói chuyện với app qua mạng nội bộ.
+# DEV_MODE đã BỎ: prod bật đủ guard secret (JWT_SECRET, TOKEN_CIPHER_KEY, ...).
 services:
   db:
     image: postgres:16
     restart: always
-    env_file:
-      - .env
+    env_file: [.env]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -12,7 +16,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    # Tắt logging statement tĩnh để tăng hiệu năng IO
+    # Tắt log_statement để giảm IO; tăng shared_buffers.
     command: ["postgres", "-c", "log_statement=none", "-c", "shared_buffers=256MB"]
 
   migrate:
@@ -24,8 +28,7 @@ services:
       - ./migrations:/work/migrations:ro
       - ./scripts:/work/scripts:ro
     working_dir: /work
-    env_file:
-      - .env
+    env_file: [.env]
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     entrypoint: ["bash", "scripts/migrate.sh"]
@@ -38,18 +41,36 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    env_file:
-      - .env
+    env_file: [.env]
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      DEV_MODE: "1"
-    ports:
-      - "8888:8080"
+    expose:
+      - "8080"
     logging:
       driver: "json-file"
       options:
         max-size: "50m"
         max-file: "3"
 
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

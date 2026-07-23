@@ -1,0 +1,6 @@
+# Caddy reverse proxy + TLS tự động (Let's Encrypt) cho RO.
+# DNS ro.xox.vn phải trỏ về IP VPS trước khi lên (đã trỏ).
+ro.xox.vn {
+	encode zstd gzip
+	reverse_proxy app:8080
+}
