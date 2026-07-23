@@ -1,4 +1,4 @@
-# Kèo — Kiến trúc hệ thống & Danh sách tính năng
+# RO — Kiến trúc hệ thống & Danh sách tính năng
 
 > App "cược điểm tập luyện": thử thách vận động (đi bộ/chạy) cùng bạn bè, đặt cược bằng điểm,
 > đồng bộ hoạt động từ Strava, có yếu tố từ thiện và shop đổi quà.

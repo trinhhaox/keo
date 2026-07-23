@@ -1,4 +1,4 @@
-# KÈO. — Cược điểm với chính mình
+# RO. — Cược điểm với chính mình
 
 Nền tảng thử thách thể dục cho thị trường Việt Nam: người dùng **cược điểm**
 vào cam kết tập luyện (đi bộ, chạy, bơi, đạp xe, gym). Về đích thì nhận lại

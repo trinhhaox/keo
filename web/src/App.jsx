@@ -186,7 +186,7 @@ function Login({ onDone }) {
   return (
       <div className="flex-1 flex flex-col items-center justify-center px-8 bg-grid">
         <div className="text-5xl mb-2 text-glow" style={{ fontFamily: "'Archivo Black', sans-serif", color: T.text }}>
-          KÈO<span style={{ color: T.brand }}>.</span>
+          RO<span style={{ color: T.brand }}>.</span>
         </div>
         <div className="text-xs uppercase tracking-widest mb-12 font-semibold" style={{ color: T.textDim }}>Thử thách chính mình và bạn bè</div>
         
@@ -810,7 +810,7 @@ function AppCore({ userProfile, onLogout }) {
           <div className="px-6 pb-5 flex items-center justify-between sticky top-0 z-20 glass-panel" style={{ background: "rgba(9,11,14,0.85)", borderBottom: `1px solid ${T.line}`, paddingTop: "calc(2rem + env(safe-area-inset-top))" }}>
             <div>
               <div className="text-3xl leading-none text-glow tracking-tight" style={{ fontFamily: "'Archivo Black', sans-serif", color: T.text }}>
-                KÈO<span style={{ color: T.brand }}>.</span>
+                RO<span style={{ color: T.brand }}>.</span>
               </div>
               <div className="text-[10px] mt-1.5 uppercase tracking-widest font-bold" style={{ color: T.brand }}>Thử thách chính mình và bạn bè</div>
             </div>
@@ -1466,7 +1466,7 @@ export default function App() {
   if (zaloLoading || authChecking) {
     return (
       <div className="h-screen bg-grid flex flex-col items-center justify-center font-bold text-lg" style={{ background: T.bg, color: T.text }}>
-        <div className="text-5xl mb-4 text-glow" style={{ fontFamily: "'Archivo Black', sans-serif", color: T.text }}>KÈO.</div>
+        <div className="text-5xl mb-4 text-glow" style={{ fontFamily: "'Archivo Black', sans-serif", color: T.text }}>RO.</div>
         <div className="text-sm font-semibold animate-pulse" style={{ color: T.brand }}>Đang kiểm tra phiên làm việc...</div>
       </div>
     );
@@ -1487,7 +1487,7 @@ export default function App() {
     };
   }
 
-  if (session === undefined && !zaloUser) return <div className="h-screen bg-grid flex items-center justify-center font-bold text-5xl" style={{ background: T.bg, color: T.brand }}>KÈO.</div>;
+  if (session === undefined && !zaloUser) return <div className="h-screen bg-grid flex items-center justify-center font-bold text-5xl" style={{ background: T.bg, color: T.brand }}>RO.</div>;
   if (!loggedIn) return (
     <div className="h-screen flex flex-col bg-grid" style={{ background: T.bg }}>
       <Login onDone={() => {}} />
