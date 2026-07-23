@@ -2,5 +2,14 @@
 # DNS ro.xox.vn phải trỏ về IP VPS trước khi lên (đã trỏ).
 ro.xox.vn {
 	encode zstd gzip
-	reverse_proxy app:8080
+	# dynamic a: re-resolve IP container "app" qua Docker DNS (127.0.0.11) mỗi 10s.
+	# Tránh 502 khi app đổi IP lúc rebuild/recreate (Caddy mặc định cache IP 1 lần).
+	reverse_proxy {
+		dynamic a {
+			name app
+			port 8080
+			refresh 10s
+			resolvers 127.0.0.11
+		}
+	}
 }
