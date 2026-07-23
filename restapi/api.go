@@ -67,6 +67,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/shop", s.withAuth(s.shop))
 	mux.HandleFunc("POST /v1/auth/zalo", s.zaloLogin)
 	mux.HandleFunc("POST /v1/auth/zalo/verify", s.zaloVerify)
+	mux.HandleFunc("POST /v1/auth/google", s.googleLogin)
 	mux.HandleFunc("GET /v1/charities/stats", s.withAuth(s.charitiesStats))
 
 	// ===== Admin APIs =====

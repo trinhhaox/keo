@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // fetchZaloID gọi Zalo Graph API chỉ để lấy `id` xác thực của chủ access_token.
@@ -199,19 +197,10 @@ func (s *Server) zaloVerify(w http.ResponseWriter, r *http.Request) {
 		avatarURL = "" // chỉ chấp nhận ảnh https; chặn javascript:/data: URL
 	}
 
-	// 3. Tạo JWT cho hệ thống của chúng ta ký bằng jwtSecret (HMAC)
-	claims := jwt.MapClaims{
-		"sub":   "zalo:" + zaloID,
-		"email": fmt.Sprintf("zalo_%s@zalo.com", zaloID),
-		"user_metadata": map[string]interface{}{
-			"full_name":  displayName,
-			"avatar_url": avatarURL,
-		},
-		"exp": time.Now().Add(7 * 24 * time.Hour).Unix(),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString(s.jwtSecret)
+	// 3. Tạo JWT nội bộ (HMAC). Email Zalo là tổng hợp (zalo_<id>@zalo.com) chứ
+	//    không phải email thật → email_verified=false (không link theo email).
+	tokenString, err := s.mintAppToken(r.Context(), "zalo:"+zaloID,
+		fmt.Sprintf("zalo_%s@zalo.com", zaloID), false, displayName, avatarURL)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "failed to sign JWT")
 		return

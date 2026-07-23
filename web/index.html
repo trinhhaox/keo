@@ -10,6 +10,8 @@
     <!-- Tailwind build-time qua PostCSS (tailwind.config.js) — tree-shake chỉ
          utilities dùng thật, không còn phụ thuộc CDN runtime. -->
     <style>body { margin: 0; }</style>
+    <!-- Google Identity Services: đăng nhập Google (luồng ID token, không cần secret). -->
+    <script src="https://accounts.google.com/gsi/client" async></script>
   </head>
   <body>
     <div id="root"></div>

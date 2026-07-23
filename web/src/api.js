@@ -1,23 +1,17 @@
 // api.js — lớp client nói chuyện với backend Go.
-// Sử dụng Supabase Auth để lấy Access Token.
+// Đăng nhập qua Zalo hoặc Google; JWT app lưu ở localStorage["keo_jwt_token"].
 
-import { createClient } from '@supabase/supabase-js'
+// Client ID công khai của Google OAuth (nhúng ở FE là bình thường, không phải bí mật).
+export const GOOGLE_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  "550781100457-t0pg0qf5bgrpejse9r5sne03dcd83k3e.apps.googleusercontent.com";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL'
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'
-
-export const supabase = createClient(supabaseUrl, supabaseKey)
-
-export async function currentToken() {
-  const localToken = localStorage.getItem("keo_jwt_token");
-  if (localToken) return localToken;
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token || null;
+export function currentToken() {
+  return localStorage.getItem("keo_jwt_token");
 }
 
-export async function logout() {
+export function logout() {
   localStorage.removeItem("keo_jwt_token");
-  await supabase.auth.signOut();
 }
 
 export class APIError extends Error {
@@ -29,7 +23,7 @@ export class APIError extends Error {
 
 async function req(method, path, body) {
   const headers = { "Content-Type": "application/json" };
-  const token = await currentToken();
+  const token = currentToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const resp = await fetch(path, {
     method,
@@ -47,6 +41,20 @@ async function req(method, path, body) {
     throw new APIError(resp.status, data?.error || `HTTP ${resp.status}`);
   }
   return data;
+}
+
+// googleLogin đổi Google ID token (credential) lấy JWT app của hệ thống.
+export async function googleLogin(credential) {
+  const resp = await fetch("/v1/auth/google", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential }),
+  });
+  const text = await resp.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* not json */ }
+  if (!resp.ok) throw new APIError(resp.status, data?.error || `HTTP ${resp.status}`);
+  return data.access_token;
 }
 
 // ===== Ví =====

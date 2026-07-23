@@ -133,25 +133,39 @@ function ChallengeStatusBadge({ startAt, endAt }) {
 }
 
 // ===== Màn đăng nhập =====
-function Login({ onDone }) {
+function Login({ onAuthed, error }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const googleBtnRef = useRef(null);
 
-  const handleGoogleLogin = async () => {
-    setBusy(true); setErr("");
-    try {
-      const { error } = await api.supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: window.location.origin,
-        }
+  // Google Identity Services: render nút chính chủ, nhận ID token (credential) rồi
+  // đổi lấy JWT app ở backend. Script GIS được nạp ở index.html.
+  useEffect(() => {
+    let cancelled = false;
+    const init = () => {
+      if (cancelled || !window.google?.accounts?.id || !googleBtnRef.current) return false;
+      window.google.accounts.id.initialize({
+        client_id: api.GOOGLE_CLIENT_ID,
+        callback: async (resp) => {
+          setBusy(true); setErr("");
+          try {
+            const token = await api.googleLogin(resp.credential);
+            onAuthed(token);
+          } catch (e) {
+            setErr(e.message || "Đăng nhập Google thất bại");
+            setBusy(false);
+          }
+        },
       });
-      if (error) throw error;
-    } catch (e) {
-      setErr(e.message || "Lỗi đăng nhập Google");
-      setBusy(false);
-    }
-  };
+      window.google.accounts.id.renderButton(googleBtnRef.current, {
+        theme: "filled_black", size: "large", shape: "pill", text: "continue_with", width: 300,
+      });
+      return true;
+    };
+    if (init()) return () => { cancelled = true; };
+    const t = setInterval(() => { if (init()) clearInterval(t); }, 200);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [onAuthed]);
 
   const handleZaloLogin = async () => {
     setBusy(true); setErr("");
@@ -191,11 +205,7 @@ function Login({ onDone }) {
         <div className="text-xs uppercase tracking-widest mb-12 font-semibold" style={{ color: T.textDim }}>Thử thách chính mình và bạn bè</div>
         
         <div className="w-full flex flex-col gap-4">
-          <button disabled={busy} onClick={handleGoogleLogin} className="w-full py-3.5 rounded-full font-bold text-[15px] flex items-center justify-center gap-2 transition-transform active:scale-95"
-            style={{ background: "#FFF", color: "#000" }}>
-            <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/><path fill="none" d="M1 1h22v22H1z"/></svg>
-            Tiếp tục với Google
-          </button>
+          <div ref={googleBtnRef} className="flex justify-center min-h-[44px]" />
           
           <button disabled={busy} onClick={handleZaloLogin} className="w-full py-3.5 rounded-full font-bold text-[15px] flex items-center justify-center gap-2 transition-transform active:scale-95"
             style={{ background: "#0068FF", color: "#FFF" }}>
@@ -205,10 +215,10 @@ function Login({ onDone }) {
         </div>
         
         {busy && <div className="text-xs mt-6 font-bold" style={{ color: T.brand }}>Đang xác thực...</div>}
-        {err && <div className="text-xs mt-6 font-bold bg-red-500/10 px-4 py-2 rounded-lg" style={{ color: T.red }}>{err}</div>}
-        
+        {(err || error) && <div className="text-xs mt-6 font-bold bg-red-500/10 px-4 py-2 rounded-lg" style={{ color: T.red }}>{err || error}</div>}
+
         <div className="text-[10px] mt-12 text-center leading-relaxed" style={{ color: T.textDim }}>
-          Bằng việc đăng nhập, bạn đồng ý với Điều khoản sử dụng <br />và Chính sách bảo mật của Kèo.
+          Bằng việc đăng nhập, bạn đồng ý với Điều khoản sử dụng <br />và Chính sách bảo mật của RO.
         </div>
       </div>
   );
@@ -1322,26 +1332,28 @@ function txnLabel(t) {
 
 // Wrapper xử lý Auth của Supabase và Zalo
 export default function App() {
-  const [session, setSession] = useState(undefined);
-  const [zaloUser, setZaloUser] = useState(null);
-  const [authChecking, setAuthChecking] = useState(true);
+  const [authUser, setAuthUser] = useState(undefined); // undefined=đang kiểm tra, null=chưa login
+  const [authError, setAuthError] = useState("");
   const [zaloLoading, setZaloLoading] = useState(false);
-  const [zaloError, setZaloError] = useState("");
   const zaloCallbackCalled = useRef(false);
 
-  const parseZaloToken = (token) => {
+  // Giải mã JWT app (Zalo/Google) để hiển thị; token hết hạn → coi như chưa login.
+  const parseAppToken = (token) => {
     try {
       const parts = token.split('.');
-      const base64Url = parts[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
       const pad = base64.length % 4;
-      const paddedBase64 = pad ? base64 + '='.repeat(4 - pad) : base64;
-      const jsonPayload = decodeURIComponent(atob(paddedBase64).split('').map(function(c) {
+      const padded = pad ? base64 + '='.repeat(4 - pad) : base64;
+      const jsonPayload = decodeURIComponent(atob(padded).split('').map(function(c) {
           return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
       }).join(''));
       const payload = JSON.parse(jsonPayload);
+      if (payload.exp && payload.exp * 1000 < Date.now()) {
+        localStorage.removeItem("keo_jwt_token");
+        return null;
+      }
       return {
-        name: payload.user_metadata?.full_name || 'Người dùng Zalo',
+        name: payload.user_metadata?.full_name || 'Người dùng',
         email: payload.email || '',
         avatar: payload.user_metadata?.avatar_url || null,
         role: payload.app_metadata?.role || null,
@@ -1352,6 +1364,12 @@ export default function App() {
     }
   };
 
+  const applyToken = useCallback((token) => {
+    if (!token) return;
+    localStorage.setItem("keo_jwt_token", token);
+    setAuthUser(parseAppToken(token));
+  }, []);
+
   useEffect(() => {
     const url = new URL(window.location.href);
     if (url.pathname === "/oauth/zalo/callback") {
@@ -1360,11 +1378,11 @@ export default function App() {
 
       const code = url.searchParams.get("code");
       const verifier = localStorage.getItem("zalo_code_verifier");
-      
+
       if (code && verifier) {
         setZaloLoading(true);
         window.history.replaceState({}, document.title, "/");
-        
+
         fetch("/v1/auth/zalo", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1373,28 +1391,19 @@ export default function App() {
         .then(async res => {
           if (!res.ok) {
             let detail = "Đăng nhập Zalo thất bại";
-            try {
-              const errData = await res.json();
-              if (errData && errData.error) detail = errData.error;
-            } catch (e) {}
+            try { const e = await res.json(); if (e && e.error) detail = e.error; } catch (e) {}
             throw new Error(detail);
           }
           return res.json();
         })
         .then(async data => {
           const zaloAccessToken = data.zalo_access_token;
-          if (!zaloAccessToken) {
-            throw new Error("Không nhận được token xác thực từ Zalo");
-          }
+          if (!zaloAccessToken) throw new Error("Không nhận được token xác thực từ Zalo");
 
           const graphRes = await fetch(`https://graph.zalo.me/v2.0/me?fields=id,name,picture&access_token=${zaloAccessToken}`);
-          if (!graphRes.ok) {
-            throw new Error("Không thể lấy thông tin cá nhân từ Zalo");
-          }
+          if (!graphRes.ok) throw new Error("Không thể lấy thông tin cá nhân từ Zalo");
           const profile = await graphRes.json();
-          if (profile.error) {
-            throw new Error(`Lỗi Zalo Profile: ${profile.message || profile.error}`);
-          }
+          if (profile.error) throw new Error(`Lỗi Zalo Profile: ${profile.message || profile.error}`);
 
           const verifyRes = await fetch("/v1/auth/zalo/verify", {
             method: "POST",
@@ -1408,62 +1417,33 @@ export default function App() {
           });
           if (!verifyRes.ok) {
             let detail = "Xác thực tài khoản thất bại";
-            try {
-              const errData = await verifyRes.json();
-              if (errData && errData.error) detail = errData.error;
-            } catch (e) {}
+            try { const e = await verifyRes.json(); if (e && e.error) detail = e.error; } catch (e) {}
             throw new Error(detail);
           }
           const appTokenData = await verifyRes.json();
-          if (appTokenData.access_token) {
-            localStorage.setItem("keo_jwt_token", appTokenData.access_token);
-            const user = parseZaloToken(appTokenData.access_token);
-            setZaloUser(user);
-          }
+          if (appTokenData.access_token) applyToken(appTokenData.access_token);
+          else throw new Error("Không nhận được phiên đăng nhập");
         })
         .catch(err => {
-          setZaloError(err.message);
+          setAuthError(err.message);
+          setAuthUser(null);
         })
-        .finally(() => {
-          setZaloLoading(false);
-          setAuthChecking(false);
-        });
+        .finally(() => setZaloLoading(false));
       } else {
-        setAuthChecking(false);
+        setAuthUser(null);
       }
     } else {
       const token = localStorage.getItem("keo_jwt_token");
-      if (token) {
-        const user = parseZaloToken(token);
-        setZaloUser(user);
-      }
-      setAuthChecking(false);
+      setAuthUser(token ? parseAppToken(token) : null);
     }
+  }, [applyToken]);
 
-    api.supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-    });
-
-    const {
-      data: { subscription },
-    } = api.supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (!session && !localStorage.getItem("keo_jwt_token")) {
-        setZaloUser(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+  const handleLogout = useCallback(() => {
+    api.logout();
+    setAuthUser(null);
   }, []);
 
-  const handleLogout = useCallback(async () => {
-    localStorage.removeItem("keo_jwt_token");
-    setZaloUser(null);
-    setSession(null);
-    await api.logout();
-  }, []);
-
-  if (zaloLoading || authChecking) {
+  if (zaloLoading || authUser === undefined) {
     return (
       <div className="h-screen bg-grid flex flex-col items-center justify-center font-bold text-lg" style={{ background: T.bg, color: T.text }}>
         <div className="text-5xl mb-4 text-glow" style={{ fontFamily: "'Archivo Black', sans-serif", color: T.text }}>RO.</div>
@@ -1472,32 +1452,10 @@ export default function App() {
     );
   }
 
-  const loggedIn = !!session || !!zaloUser;
-
-  let userProfile = null;
-  if (zaloUser) {
-    userProfile = zaloUser;
-  } else if (session?.user) {
-    const u = session.user;
-    userProfile = {
-      name: u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'Người dùng',
-      email: u.email || '',
-      avatar: u.user_metadata?.avatar_url || u.user_metadata?.picture || null,
-      role: u.app_metadata?.role || null,
-    };
-  }
-
-  if (session === undefined && !zaloUser) return <div className="h-screen bg-grid flex items-center justify-center font-bold text-5xl" style={{ background: T.bg, color: T.brand }}>RO.</div>;
-  if (!loggedIn) return (
+  if (!authUser) return (
     <div className="h-screen flex flex-col bg-grid" style={{ background: T.bg }}>
-      <Login onDone={() => {}} />
-      {zaloError && (
-        <div className="absolute top-6 inset-x-6 z-50 rounded-2xl px-5 py-4 text-xs font-bold text-center border backdrop-blur-sm bg-red-500/10"
-          style={{ borderColor: T.red, color: T.red }}>
-          {zaloError}
-        </div>
-      )}
+      <Login onAuthed={applyToken} error={authError} />
     </div>
   );
-  return <AppCore userProfile={userProfile} onLogout={handleLogout} />;
+  return <AppCore userProfile={authUser} onLogout={handleLogout} />;
 }
