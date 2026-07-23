@@ -77,6 +77,10 @@ export const getLeaderboard = (id) => req("GET", `/v1/challenges/${id}/leaderboa
 export const getMyActivities = () => req("GET", "/v1/me/activities");
 export const getMyStats = () => req("GET", "/v1/me/stats");
 
+// ===== Kết nối Strava =====
+export const getStravaStatus = () => req("GET", "/v1/oauth/strava/status");
+export const disconnectStrava = () => req("POST", "/v1/oauth/strava/disconnect");
+
 // ===== Điểm thưởng (check-in + km Strava) =====
 export const getRewards = () => req("GET", "/v1/rewards");
 export const checkIn = () => req("POST", "/v1/checkins");

@@ -140,6 +140,46 @@ func (c *HTTPStravaClient) ExchangeCode(ctx context.Context, userID int64, code 
 	return nil
 }
 
+// Disconnect gỡ kết nối Strava của user: best-effort thu hồi token phía Strava
+// (deauthorize) rồi XOÁ integration để user có thể kết nối lại. Idempotent (chưa
+// kết nối → không lỗi). Token cũ mã hoá bằng KEK khác (sau khi xoay khoá) giải mã
+// lỗi → bỏ qua deauthorize nhưng VẪN xoá row, đúng nhu cầu "ngắt để đổi".
+func (c *HTTPStravaClient) Disconnect(ctx context.Context, userID int64) error {
+	var accessEnc []byte
+	err := c.Pool.QueryRow(ctx,
+		`SELECT access_token_enc FROM user_integrations WHERE user_id = $1 AND provider = 'strava'`,
+		userID).Scan(&accessEnc)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // đã ngắt rồi
+	}
+	if err != nil {
+		return fmt.Errorf("load integration: %w", err)
+	}
+	if access, e := c.Cipher.Decrypt(ctx, accessEnc); e == nil {
+		c.deauthorize(ctx, string(access)) // best-effort, không chặn
+	}
+	if _, err := c.Pool.Exec(ctx,
+		`DELETE FROM user_integrations WHERE user_id = $1 AND provider = 'strava'`,
+		userID); err != nil {
+		return fmt.Errorf("delete integration: %w", err)
+	}
+	return nil
+}
+
+// deauthorize gọi endpoint thu hồi của Strava; lỗi chỉ bỏ qua, không chặn ngắt kết nối.
+func (c *HTTPStravaClient) deauthorize(ctx context.Context, accessToken string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.base()+"/oauth/deauthorize",
+		strings.NewReader(url.Values{"access_token": {accessToken}}.Encode()))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if resp, err := c.hc().Do(req); err == nil {
+		resp.Body.Close()
+	}
+}
+
 // GetActivity fetch chi tiết hoạt động bằng token của athlete, tự refresh
 // khi token sắp hết hạn.
 func (c *HTTPStravaClient) GetActivity(ctx context.Context, athleteID, activityID int64) (StravaActivity, error) {

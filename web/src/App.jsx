@@ -645,6 +645,7 @@ function AppCore({ userProfile, onLogout }) {
   const [toast, setToast] = useState(null); // { msg, type }
   const [paymentQR, setPaymentQR] = useState(null);
   const [rewards, setRewards] = useState(null); // { checked_in_today, total_points }
+  const [stravaConnected, setStravaConnected] = useState(false);
   const [redeemConfirm, setRedeemConfirm] = useState(null);
   const [deliveryForm, setDeliveryForm] = useState(null);
   const [redemptions, setRedemptions] = useState([]);
@@ -669,18 +670,33 @@ function AppCore({ userProfile, onLogout }) {
       .catch(() => showToast("Không thể sao chép link", "error"));
   }, [showToast]);
 
+  const handleStravaDisconnect = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.disconnectStrava();
+      setStravaConnected(false);
+      showToast("Đã ngắt kết nối Strava. Bạn có thể kết nối lại bất cứ lúc nào.", "success");
+    } catch (e) {
+      showToast(`Ngắt kết nối thất bại: ${e.message}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, showToast]);
+
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const [w, cs, m, sh, tx, st, ac, rw, rd, ch] = await Promise.all([
+      const [w, cs, m, sh, tx, st, ac, rw, rd, ch, str] = await Promise.all([
         api.getWallet(), api.listChallenges(), api.myChallenges(), api.getShop(), api.getTransactions(),
         api.getMyStats(), api.getMyActivities(),
         // Rewards lỗi không được kéo sập cả app — degrade thành ẩn thẻ thưởng.
         api.getRewards().catch(() => null),
         api.getRedemptions().catch(() => []),
         api.getCharitiesStats().catch(() => ({ "1001": 0, "1002": 0 })),
+        api.getStravaStatus().catch(() => ({ connected: false })),
       ]);
-      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac); setRewards(rw); setRedemptions(rd); setCharityStats(ch);
+      setWallet(w); setChallenges(cs); setMine(m); setShop(sh); setTxs(tx); setStats(st); setActs(ac); setRewards(rw); setRedemptions(rd); setCharityStats(ch); setStravaConnected(!!str?.connected);
       setLoadError(null);
     } catch (e) {
       if (e.status === 401) { onLogout(); }
@@ -1147,20 +1163,22 @@ function AppCore({ userProfile, onLogout }) {
                   {[
                     { label: 'Lịch sử giao dịch', action: () => switchTab('wallet') },
                     { label: 'Kèo của tôi', action: () => switchTab('mine') },
-                    {
-                      label: 'Kết nối Strava ⚡',
-                      action: async () => {
-                        const token = await api.currentToken();
-                         const stravaClientID = "265299";
-                        const redirectURI = `${window.location.origin}/v1/oauth/strava/callback`;
-                        window.location.href = `https://www.strava.com/oauth/authorize?client_id=${stravaClientID}&redirect_uri=${encodeURIComponent(redirectURI)}&response_type=code&approval_prompt=auto&scope=read,activity:read_all&state=${token}`;
-                      }
-                    },
+                    stravaConnected
+                      ? { label: 'Ngắt kết nối Strava', danger: true, action: handleStravaDisconnect }
+                      : {
+                          label: 'Kết nối Strava ⚡',
+                          action: async () => {
+                            const token = await api.currentToken();
+                            const stravaClientID = "265299";
+                            const redirectURI = `${window.location.origin}/v1/oauth/strava/callback`;
+                            window.location.href = `https://www.strava.com/oauth/authorize?client_id=${stravaClientID}&redirect_uri=${encodeURIComponent(redirectURI)}&response_type=code&approval_prompt=auto&scope=read,activity:read_all&state=${token}`;
+                          }
+                        },
                     ...(isAdmin ? [{ label: 'Trang Quản trị 🛠️', action: () => switchTab('admin') }] : []),
                   ].map((item, i) => (
                     <button key={i} onClick={item.action} className="w-full flex items-center justify-between px-5 py-4 transition-colors hover:bg-white/5"
                       style={{ borderBottom: `1px solid ${T.line}` }}>
-                      <span className="text-sm font-semibold" style={{ color: T.text }}>{item.label}</span>
+                      <span className="text-sm font-semibold" style={{ color: item.danger ? '#FF3B30' : T.text }}>{item.label}</span>
                       <ChevronRight size={16} style={{ color: T.textDim }} />
                     </button>
                   ))}

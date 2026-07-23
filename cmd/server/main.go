@@ -217,6 +217,37 @@ func run(log *slog.Logger) error {
 		`))
 	})
 
+	// Trạng thái kết nối Strava (cho FE hiện nút Kết nối / Ngắt kết nối).
+	mux.HandleFunc("GET /v1/oauth/strava/status", func(w http.ResponseWriter, r *http.Request) {
+		userID, err := authUserID(r)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var athleteID string
+		err = pool.QueryRow(r.Context(),
+			`SELECT external_user_id FROM user_integrations WHERE user_id = $1 AND provider = 'strava' AND revoked_at IS NULL`,
+			userID).Scan(&athleteID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"connected": err == nil, "athlete_id": athleteID})
+	})
+
+	// Ngắt kết nối Strava (thu hồi token + xoá integration).
+	mux.HandleFunc("POST /v1/oauth/strava/disconnect", func(w http.ResponseWriter, r *http.Request) {
+		userID, err := authUserID(r)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := stravaClient.Disconnect(r.Context(), userID); err != nil {
+			log.Error("strava disconnect", "err", err)
+			http.Error(w, "disconnect failed", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+
 	// ===== Background workers =====
 	supervise(ctx, &wg, log, "settlement", func(c context.Context) {
 		job := challenge.NewSettlementJob(challengeStore, log)
