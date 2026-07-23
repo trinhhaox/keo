@@ -97,7 +97,7 @@ docker compose -f docker-compose.prod.yml exec db \
 ## Ghi chú
 
 - **Settlement + Strava ingest chạy in-process** trong binary (worker mỗi 15p / 5s) →
-  KHÔNG cần cron ngoài. Có thể gỡ Cloudflare Worker cron (Pha 4).
+  KHÔNG cần cron ngoài (Cloudflare Worker cũ đã gỡ khỏi repo).
 - **Di trú dữ liệu Supabase → Postgres VPS**: xem Pha 3 (chạy lần đầu với DB rỗng để
   test TLS + login trước cũng được, sau đó import dữ liệu thật).
 - Sau khi cài xong: **đổi mật khẩu root**, cân nhắc SSH key + tắt password auth.

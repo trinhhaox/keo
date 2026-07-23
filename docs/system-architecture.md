@@ -2,55 +2,50 @@
 
 > App "cược điểm tập luyện": thử thách vận động (đi bộ/chạy) cùng bạn bè, đặt cược bằng điểm,
 > đồng bộ hoạt động từ Strava, có yếu tố từ thiện và shop đổi quà.
-> Prod: **app.xox.vn** (Vercel serverless). Cập nhật: 2026-07-19.
+> Prod: **ro.xox.vn** (VPS Ubuntu + Docker + Caddy). Cập nhật: 2026-07-23.
 
 ## 1. Kiến trúc tổng quan
 
 ```mermaid
 flowchart TB
     User(["Người dùng"])
-    subgraph FE["Frontend — React 18 + Vite + Tailwind (SPA)"]
-        WEB["web/ — Vercel static"]
+    subgraph VPS["VPS Ubuntu — Docker Compose"]
+        CADDY["Caddy\n(TLS Let's Encrypt)"]
+        APP["app — Go binary\n(API + SPA + 2 worker)"]
+        DB[("PostgreSQL 16\ndouble-entry ledger")]
     end
-    subgraph BE["Backend — Go 1.25 serverless"]
-        API["api/index.go (Vercel entrypoint)"]
-    end
-    DB[("PostgreSQL / Supabase\ndouble-entry ledger")]
+    GOOGLE["Google OAuth\n(ID token)"]
+    ZALO["Zalo OAuth"]
     STRAVA["Strava\n(OAuth + Webhook)"]
     SEPAY["SePay\n(nạp điểm)"]
-    ZALO["Zalo OAuth"]
-    CFCRON["Cloudflare Worker\ncron */5"]
-    VCRON["Vercel cron\ndaily (backstop)"]
 
-    User --> WEB --> API --> DB
-    ZALO -. đăng nhập .-> API
-    STRAVA -. webhook hoạt động .-> API
-    SEPAY -. webhook thanh toán .-> API
-    API -. fetch activity .-> STRAVA
-    CFCRON -->|/api/cron/strava| API
-    VCRON -->|/api/cron/strava, /settle| API
+    User --> CADDY --> APP --> DB
+    GOOGLE -. đăng nhập .-> APP
+    ZALO -. đăng nhập .-> APP
+    STRAVA -. webhook hoạt động .-> APP
+    SEPAY -. webhook thanh toán .-> APP
+    APP -. fetch activity .-> STRAVA
+    APP -->|worker in-process: settle 15p · strava 5s| DB
 ```
 
-- **Frontend**: React 18 + Vite + Tailwind (build-time), SPA phục vụ static qua Vercel.
-- **Backend**: Go 1.25 serverless (`api/index.go`); cũng chạy được **binary VPS** (`cmd/server`) qua docker-compose.
-- **DB**: PostgreSQL (Supabase) + pgx/v5, dùng **sổ cái kép (double-entry ledger)** cho mọi biến động điểm.
-- **Auth**: Zalo OAuth → JWT HS256 (ký nội bộ bằng `jwtSecret`).
-- **Dịch vụ ngoài**: Strava (webhook + OAuth), SePay (nạp điểm), Cloudflare (domain + Worker cron).
+- **Frontend**: React 18 + Vite + Tailwind (build-time), SPA do Go binary serve same-origin sau Caddy.
+- **Backend**: Go 1.25 binary (`cmd/server`) — API + webhook + **2 background worker** (settlement 15p, strava ingest 5s) chạy in-process, qua docker-compose trên VPS.
+- **DB**: PostgreSQL 16 **tự host** (Docker) + pgx/v5, dùng **sổ cái kép (double-entry ledger)** cho mọi biến động điểm.
+- **Auth**: Zalo + **Google OAuth native** → JWT HS256 (ký nội bộ bằng `jwtSecret`); quyền admin theo cột `users.is_admin`.
+- **Dịch vụ ngoài**: Strava (webhook + OAuth), SePay (nạp điểm), Google (OAuth). TLS + domain do **Caddy** (Let's Encrypt).
 
 ## 2. Cấu trúc mã nguồn (Go packages)
 
 | Package | Vai trò |
 |---|---|
-| `api/` | Entrypoint Vercel: khởi tạo services, gắn routes, 2 cron |
-| `restapi/` | HTTP handlers: auth, zalo, challenges, wallet, shop, admin |
+| `restapi/` | HTTP handlers: auth (zalo, google), challenges, wallet, shop, admin |
 | `challenge/` | Logic kèo + `SettlementJob` (giải quyết kèo đến hạn) |
 | `ledger/` | Sổ cái kép: `ledger_accounts`, `ledger_entries`, `ledger_transactions` |
 | `reward/` | Thưởng check-in + thưởng quãng đường (1 điểm/km tròn, có DailyCap) |
 | `ingest/` | Đồng bộ Strava/health: webhook inbox, worker, KMS/cipher mã hoá token |
 | `payment/` | Nạp điểm qua SePay |
 | `migrations/` | SQL migrations nhúng (`embed.go`) + runner |
-| `cmd/server/` | Bản chạy binary trên VPS (long-running) |
-| `cloudflare/strava-cron/` | Cloudflare Worker cron `*/5` drain hàng đợi webhook |
+| `cmd/server/` | **Entrypoint chính**: binary long-running trên VPS (API + SPA + worker) |
 | `web/` | Frontend React |
 
 **Frontend modules** (`web/src/`): `App.jsx` (core) · `activity-feed` · `create-sheet` · `delivery-modal` · `leaderboard-sheet` · `admin-dashboard` · `notification` · `ui-primitives` · `api.js` · `theme.js`.
@@ -74,8 +69,10 @@ flowchart TB
 ## 4. Danh sách tính năng (theo API)
 
 ### 🔐 Xác thực
-- Đăng nhập **Zalo** OAuth: `POST /v1/auth/zalo` → `POST /v1/auth/zalo/verify`; dev-login
+- Đăng nhập **Zalo** OAuth: `POST /v1/auth/zalo` → `POST /v1/auth/zalo/verify`
+- Đăng nhập **Google** (native, verify ID token qua JWKS): `POST /v1/auth/google`
 - Kết nối **Strava** OAuth: `GET /v1/oauth/strava/callback`
+- Quyền admin: cột `users.is_admin` (DB là nguồn quyền lực, kiểm ở middleware)
 
 ### 🎯 Kèo (thử thách)
 - Xem danh sách kèo, nhóm theo trạng thái mở / đang chạy / kết thúc: `GET /v1/challenges`
@@ -104,9 +101,9 @@ flowchart TB
 - CRUD sản phẩm shop: `GET/POST/PUT/DELETE /v1/admin/shop-items`
 - Duyệt đơn đổi quà: `GET /v1/admin/redemptions`, `POST /v1/admin/redemptions/{id}/status`
 
-### ⚙️ Nền (cron)
-- `/api/cron/strava` — drain hàng đợi webhook Strava (Cloudflare Worker `*/5`)
-- `POST /api/cron/settle` — giải quyết kèo đến hạn (chia thưởng / hoàn cược)
+### ⚙️ Nền (worker in-process, không cần cron ngoài)
+- **Strava ingest worker** — vòng lặp mỗi 5s, drain `webhook_inbox` (claim-then-process)
+- **Settlement worker** — mỗi 15 phút, giải quyết kèo đến hạn (chia thưởng / hoàn cược)
 
 ## 5. Luồng đồng bộ Strava
 
@@ -114,25 +111,25 @@ flowchart TB
 flowchart LR
     A["Strava: user tập"] -->|webhook POST| B["/webhooks/strava\n(verify subscription_id)"]
     B --> C[("webhook_inbox\nstatus=pending")]
-    C -->|inline ~2.5s HOẶC cron */5| D["ProcessOnce\nclaim-then-process (H2b)"]
+    C -->|inline ~2.5s HOẶC worker 5s| D["ProcessOnce\nclaim-then-process (H2b)"]
     D -->|GetActivity| A
     D --> E[("activities\n(upsert)")]
     E --> F["recompute kèo + reward\n(1đ/km, DailyCap)"]
     F --> G[("ledger + reward_events")]
 ```
 
-- **Real-time**: webhook xử lý inline ~2.5s. **Lưới an toàn**: Cloudflare Worker `*/5` vét event lỡ cửa sổ. **Backstop**: Vercel cron daily.
-- Lỗi tạm thời (timeout cold-start) → tự requeue theo backoff (`next_attempt_at`).
+- **Real-time**: webhook xử lý inline ~2.5s. **Lưới an toàn**: worker in-process vòng lặp 5s vét event lỡ cửa sổ (thay Cloudflare Worker cũ).
+- Lỗi tạm thời → tự requeue theo backoff (`next_attempt_at`).
 
 ## 6. Vận hành & bảo mật
 
-- **Hạ tầng**: Vercel (`app.xox.vn`, region iad1) + Supabase (`odqgtnyjwpoyzhxqrciq`) + Cloudflare Worker cron.
-- **Đã hardening**: sổ cái kép an toàn (`stake_release`), bỏ tin `email_verified` (verify GoTrue), gate secret prod + chặn KEK toàn-0, verify `subscription_id` webhook Strava, HTTP timeout + body limit, pgxpool config, graceful drain + panic recover worker, atomic create+join kèo, constant-time SePay key, JWT bắt buộc `exp`, rate-limit `/v1/auth` (binary), index/pagination/cache-control.
-- **Điểm treo bảo mật**: Zalo id-spoofing (Graph API chặn IP ngoài VN nên backend tin `id` từ client — cần VN proxy); JWT `aud`/`iss` enforcement.
+- **Hạ tầng**: VPS Ubuntu (`ro.xox.vn`, IP VN) — Docker Compose (Caddy + app + Postgres 16 tự host). Không còn Vercel/Supabase/Cloudflare. Triển khai: xem `docs/deploy-vps.md`.
+- **Đã hardening**: sổ cái kép an toàn (`stake_release`), Google ID token verify `aud`/`iss`/`exp` qua JWKS, gate secret prod + chặn KEK toàn-0, verify `subscription_id` webhook Strava, HTTP timeout + body limit, pgxpool config, graceful drain + panic recover worker, atomic create+join kèo, constant-time SePay key, JWT bắt buộc `exp`, rate-limit `/v1/auth`, admin theo DB (không tin claim), index/pagination/cache-control.
+- **Điểm treo bảo mật**: Zalo id-spoofing (fallback tin `id` từ client) — VPS đặt ở VN nên Graph API thường trả `id` authoritative, giảm rủi ro; nên xác nhận qua log.
 
-## 7. Biến môi trường quan trọng (Vercel)
+## 7. Biến môi trường quan trọng (VPS `.env`)
 
-`DATABASE_URL`, `JWT_SECRET`, `SEPAY_API_KEY`/`SEPAY_ACCOUNT_NO`/`SEPAY_BANK_CODE`, `STRAVA_CLIENT_ID`/`STRAVA_CLIENT_SECRET`/`STRAVA_VERIFY_TOKEN`/`STRAVA_SUBSCRIPTION_ID`, `TOKEN_CIPHER_KEY`, `ZALO_APP_ID`/`ZALO_SECRET_KEY`, `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`.
+`DATABASE_URL` (nội bộ `@db:5432`), `JWT_SECRET`, `TOKEN_CIPHER_KEY` (base64 32-byte), `SEPAY_API_KEY`/`SEPAY_ACCOUNT_NO`/`SEPAY_BANK_CODE`, `STRAVA_CLIENT_ID`/`STRAVA_CLIENT_SECRET`/`STRAVA_VERIFY_TOKEN`/`STRAVA_SUBSCRIPTION_ID`, `GOOGLE_OAUTH_CLIENT_ID`, `ZALO_APP_ID`/`ZALO_SECRET_KEY`. Mẫu: `env.prod.sample`.
 
-> ⚠️ Đổi env trên Vercel PHẢI deploy tươi (git push) — nút "Redeploy" có thể tái dùng snapshot env cũ.
-> ⚠️ Migration KHÔNG tự chạy khi deploy — phải áp tay (endpoint `/api/admin/migrate` hoặc Supabase trực tiếp).
+> ⚠️ Prod BẮT BUỘC set `JWT_SECRET`, `TOKEN_CIPHER_KEY`, `SEPAY_API_KEY`, `STRAVA_VERIFY_TOKEN`, `STRAVA_CLIENT_SECRET` — thiếu là app tự thoát.
+> ⚠️ Migration chạy tự động qua service `migrate` trong docker-compose (không cần áp tay).
