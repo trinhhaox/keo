@@ -34,7 +34,12 @@ services:
     entrypoint: ["bash", "scripts/migrate.sh"]
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Vite nhúng lúc build; lấy từ .env (ZALO_APP_ID dùng chung cho FE lẫn BE).
+        VITE_ZALO_APP_ID: ${ZALO_APP_ID}
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID}
     restart: always
     depends_on:
       db:

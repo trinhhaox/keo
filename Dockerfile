@@ -4,6 +4,11 @@ WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
+# Biến VITE_* phải có lúc build (Vite nhúng vào bundle). Truyền qua build-arg từ
+# docker-compose (đọc .env). Thiếu → frontend rơi về fallback hardcode (sai app_id).
+ARG VITE_ZALO_APP_ID
+ARG VITE_GOOGLE_CLIENT_ID
+ENV VITE_ZALO_APP_ID=$VITE_ZALO_APP_ID VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 RUN npm run build
 
 # ===== Stage 2: build Go server =====
