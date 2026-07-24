@@ -81,20 +81,32 @@ Mở trình duyệt `https://ro.xox.vn` → thử đăng nhập Google + Zalo.
 
 ## 5. Vận hành
 
-### Redeploy nhanh (một lệnh)
+### Auto-deploy khi push lên GitHub (khuyến nghị)
 
-Gộp đồng bộ cấu hình SePay + kéo code + build lại + xem log:
+Push lên nhánh `main` → GitHub Actions chạy test/build, nếu pass sẽ **tự deploy**:
+rsync code lên `/opt/ro` (loại trừ `.env` + `Caddyfile`) rồi chạy `scripts/redeploy.sh`
+để rebuild + restart app. Xem workflow ở `.github/workflows/ci.yml` (job `deploy`).
+
+Cần 3 secret trong repo (Settings → Secrets → Actions), set một lần:
 
 ```bash
-cd /opt/ro && bash scripts/redeploy.sh            # dùng STK/bank mặc định
-# hoặc truyền STK + mã ngân hàng nhận tiền QR:
-cd /opt/ro && bash scripts/redeploy.sh 0977496222 MB
+gh secret set VPS_HOST --body "116.118.2.40" --repo trinhhaox/keo
+gh secret set VPS_USER --body "root"         --repo trinhhaox/keo
+gh secret set VPS_SSH_KEY --repo trinhhaox/keo < ~/.ssh/ro_vps   # private key khớp public key đã nạp vào VPS
 ```
 
-> `SEPAY_BANK_CODE` phải là mã ngắn hợp lệ (vd `MB`, `Vietcombank`, `TPBank`) —
-> để tên có dấu cách ("Ngân hàng MB") sẽ làm ảnh QR nạp tiền bị vỡ.
+> `.env` và `Caddyfile` là host-specific (bí mật + phục vụ nhiều domain) nên
+> **không bao giờ bị deploy ghi đè** — sửa trực tiếp trên VPS khi cần.
+> `SEPAY_BANK_CODE` phải là mã ngắn hợp lệ (vd `MB`, `Vietcombank`, `TPBank`);
+> tên có dấu cách ("Ngân hàng MB") sẽ làm ảnh QR nạp tiền bị vỡ.
 
-### Thủ công
+### Redeploy tay trên VPS
+
+```bash
+cd /opt/ro && bash scripts/redeploy.sh   # rebuild + restart app (không đụng .env/Caddyfile)
+```
+
+### Thủ công đầy đủ
 
 ```bash
 # Cập nhật code mới:

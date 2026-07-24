@@ -41,3 +41,37 @@ jobs:
 
     - name: Verify Docker Build
       run: docker build -t keo-app-test .
+
+  deploy:
+    needs: test-and-build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-vps
+      cancel-in-progress: false
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup SSH key
+      run: |
+        mkdir -p ~/.ssh
+        printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+        ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+    # Đẩy code lên VPS. Loại trừ .env + Caddyfile (host-specific, giữ nguyên trên
+    # VPS) và các thư mục build/phụ thuộc. KHÔNG --delete để tránh xoá file host.
+    - name: Rsync code to VPS
+      run: |
+        rsync -az \
+          -e "ssh -i ~/.ssh/deploy_key -o BatchMode=yes" \
+          --exclude='.git/' --exclude='.env' --exclude='.env*' --exclude='Caddyfile' \
+          --exclude='node_modules/' --exclude='web/node_modules/' --exclude='web/dist/' \
+          --exclude='*.log' --exclude='.github/' --exclude='keo-data.sql' \
+          ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/ro/"
+
+    - name: Rebuild & restart app on VPS
+      run: |
+        ssh -i ~/.ssh/deploy_key -o BatchMode=yes \
+          "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+          'cd /opt/ro && bash scripts/redeploy.sh'
