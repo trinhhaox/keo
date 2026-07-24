@@ -81,6 +81,21 @@ Mở trình duyệt `https://ro.xox.vn` → thử đăng nhập Google + Zalo.
 
 ## 5. Vận hành
 
+### Redeploy nhanh (một lệnh)
+
+Gộp đồng bộ cấu hình SePay + kéo code + build lại + xem log:
+
+```bash
+cd /opt/ro && bash scripts/redeploy.sh            # dùng STK/bank mặc định
+# hoặc truyền STK + mã ngân hàng nhận tiền QR:
+cd /opt/ro && bash scripts/redeploy.sh 0977496222 MB
+```
+
+> `SEPAY_BANK_CODE` phải là mã ngắn hợp lệ (vd `MB`, `Vietcombank`, `TPBank`) —
+> để tên có dấu cách ("Ngân hàng MB") sẽ làm ảnh QR nạp tiền bị vỡ.
+
+### Thủ công
+
 ```bash
 # Cập nhật code mới:
 git pull && docker compose -f docker-compose.prod.yml up -d --build
