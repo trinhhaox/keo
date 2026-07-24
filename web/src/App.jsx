@@ -643,7 +643,8 @@ function AppCore({ userProfile, onLogout }) {
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null); // { msg, type }
-  const [paymentQR, setPaymentQR] = useState(null);
+  const [paymentQR, setPaymentQR] = useState(null); // object order từ /wallet/purchase
+  const [qrBroken, setQrBroken] = useState(false);  // ảnh QR SePay không tải được
   const [rewards, setRewards] = useState(null); // { checked_in_today, total_points }
   const [stravaConnected, setStravaConnected] = useState(false);
   const [redeemConfirm, setRedeemConfirm] = useState(null);
@@ -773,6 +774,15 @@ function AppCore({ userProfile, onLogout }) {
     }
     catch (e) { showToast(e.status === 402 ? "Không đủ điểm — mua thêm ở tab Ví ⭐" : `Lỗi: ${e.message}`, "error"); }
     finally { setBusy(false); }
+  };
+
+  const copyText = async (text) => {
+    try {
+      await navigator.clipboard.writeText(String(text));
+      showToast("Đã sao chép ✓", "success");
+    } catch {
+      showToast("Không sao chép được — vui lòng chép tay", "error");
+    }
   };
 
   const doCheckin = async () => {
@@ -1099,7 +1109,8 @@ function AppCore({ userProfile, onLogout }) {
                     <button key={p.pts} disabled={busy}
                       onClick={() => act(async () => {
                         const order = await api.buyPack(p.pts);
-                        setPaymentQR(order.order_url);
+                        setQrBroken(false);
+                        setPaymentQR(order);
                       }, null)}
                       className="rounded-2xl p-4 text-left active:scale-95 transition-all group hover:bg-zinc-800" style={{ background: T.card, border: `1px solid ${T.line}` }}>
                       <div className="text-xl font-bold" style={{ ...MONO, color: T.text }}>
@@ -1237,12 +1248,44 @@ function AppCore({ userProfile, onLogout }) {
               <div className="w-full max-w-sm rounded-3xl p-6 relative overflow-hidden text-center scale-in" style={{ background: T.card, border: `1px solid ${T.line}` }} onClick={e => e.stopPropagation()}>
                 <h2 className="text-xl font-black mb-4 uppercase tracking-wider" style={{ color: T.text }}>Thanh Toán</h2>
                 <div className="bg-white p-4 rounded-2xl mx-auto mb-4 inline-block">
-                  <img src={paymentQR} alt="VietQR" className="w-48 h-48 object-contain" />
+                  {qrBroken ? (
+                    <div className="w-48 h-48 flex flex-col items-center justify-center text-center px-3" style={{ color: "#666" }}>
+                      <div className="text-3xl mb-2">🏦</div>
+                      <div className="text-[12px] font-semibold leading-snug">Không tải được mã QR.<br />Vui lòng chuyển khoản thủ công theo thông tin bên dưới.</div>
+                    </div>
+                  ) : (
+                    <img src={paymentQR.order_url} alt="VietQR" className="w-48 h-48 object-contain"
+                      onError={() => setQrBroken(true)} />
+                  )}
                 </div>
+
+                {/* Chi tiết chuyển khoản — phương án dự phòng khi ảnh QR hỏng */}
+                <div className="rounded-2xl p-3 mb-4 text-left" style={{ background: T.bg, border: `1px solid ${T.line}` }}>
+                  {[
+                    { label: "Ngân hàng", value: paymentQR.bank_code },
+                    { label: "Số tài khoản", value: paymentQR.account_no, copy: true },
+                    { label: "Số tiền", value: Number(paymentQR.amount_vnd || 0).toLocaleString("vi-VN") + "đ", copy: true, raw: String(paymentQR.amount_vnd || "") },
+                    { label: "Nội dung CK", value: paymentQR.transfer_content, copy: true },
+                  ].map((row) => (
+                    <div key={row.label} className="flex items-center justify-between py-1.5">
+                      <span className="text-[12px] font-medium" style={{ color: T.textDim }}>{row.label}</span>
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span className="text-[13px] font-bold truncate" style={{ ...MONO, color: T.text }}>{row.value || "—"}</span>
+                        {row.copy && row.value && (
+                          <button onClick={() => copyText(row.raw ?? row.value)}
+                            className="text-[10px] px-2 py-0.5 rounded-md font-bold shrink-0 active:scale-95" style={{ background: T.line, color: T.brand }}>
+                            Sao chép
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
                 <p className="text-[13px] font-medium leading-relaxed mb-6" style={{ color: T.textDim }}>
-                  Quét mã bằng App Ngân hàng bất kỳ.<br />Điểm sẽ tự động cộng sau 5-10s!
+                  Quét mã hoặc chuyển khoản đúng nội dung.<br />Điểm sẽ tự động cộng sau 5-10s!
                 </p>
-                <button className="w-full btn-neon font-bold py-3.5 rounded-xl uppercase tracking-widest text-[13px] active:scale-[0.98] transition-transform" 
+                <button className="w-full btn-neon font-bold py-3.5 rounded-xl uppercase tracking-widest text-[13px] active:scale-[0.98] transition-transform"
                   style={{ background: T.brand, color: T.bg, boxShadow: "0 4px 15px rgba(204,255,0,0.25)" }}
                   onClick={() => { setPaymentQR(null); load(true); }}>
                   Tôi đã chuyển tiền

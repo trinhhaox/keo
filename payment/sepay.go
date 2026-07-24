@@ -43,17 +43,36 @@ type Service struct {
 }
 
 func NewService(pool *pgxpool.Pool, l *ledger.PGStore, apiKey, accountNo, bankCode string, log *slog.Logger) *Service {
+	// Trim khoảng trắng/xuống dòng lọt vào từ file .env — acc/bank dính dấu cách
+	// khiến endpoint ảnh qr.sepay.vn trả về trang HTML lỗi thay vì ảnh QR.
+	accountNo = strings.TrimSpace(accountNo)
+	bankCode = strings.TrimSpace(bankCode)
+	if accountNo == "" || bankCode == "" {
+		log.Warn("SePay thiếu cấu hình STK/ngân hàng — mã QR nạp tiền sẽ hỏng",
+			"account_no", accountNo, "bank_code", bankCode)
+	}
 	return &Service{pool: pool, ledger: l, apiKey: apiKey, accountNo: accountNo, bankCode: bankCode, log: log}
 }
 
-// CreateOrder tạo đơn pending và trả về link ảnh VietQR của SePay
-func (s *Service) CreateOrder(ctx context.Context, userID, packPoints int64) (orderURL, appTransID string, err error) {
+// Order gói thông tin màn thanh toán: ảnh QR của SePay kèm chi tiết chuyển khoản
+// thủ công để người dùng vẫn nạp được khi ảnh QR không tải được.
+type Order struct {
+	OrderURL        string `json:"order_url"`
+	AppTransID      string `json:"app_trans_id"`
+	AccountNo       string `json:"account_no"`
+	BankCode        string `json:"bank_code"`
+	AmountVND       int64  `json:"amount_vnd"`
+	TransferContent string `json:"transfer_content"`
+}
+
+// CreateOrder tạo đơn pending và trả về link ảnh VietQR của SePay + chi tiết CK.
+func (s *Service) CreateOrder(ctx context.Context, userID, packPoints int64) (*Order, error) {
 	pack, ok := Packs[packPoints]
 	if !ok {
-		return "", "", fmt.Errorf("gói %d điểm không tồn tại", packPoints)
+		return nil, fmt.Errorf("gói %d điểm không tồn tại", packPoints)
 	}
 
-	appTransID = fmt.Sprintf("KEO%d%d", userID, time.Now().Unix()%100000)
+	appTransID := fmt.Sprintf("KEO%d%d", userID, time.Now().Unix()%100000)
 
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO point_purchases
@@ -61,7 +80,7 @@ func (s *Service) CreateOrder(ctx context.Context, userID, packPoints int64) (or
 		VALUES ($1, $2, $3, $4, 'sepay', $5)`,
 		userID, pack.Points, pack.Bonus, pack.PriceVND, appTransID,
 	); err != nil {
-		return "", "", fmt.Errorf("create purchase: %w", err)
+		return nil, fmt.Errorf("create purchase: %w", err)
 	}
 
 	// https://qr.sepay.vn/img?acc={acc}&bank={bank}&amount={amount}&des={des}
@@ -72,7 +91,14 @@ func (s *Service) CreateOrder(ctx context.Context, userID, packPoints int64) (or
 		url.QueryEscape(appTransID),
 	)
 
-	return qrURL, appTransID, nil
+	return &Order{
+		OrderURL:        qrURL,
+		AppTransID:      appTransID,
+		AccountNo:       s.accountNo,
+		BankCode:        s.bankCode,
+		AmountVND:       pack.PriceVND,
+		TransferContent: appTransID,
+	}, nil
 }
 
 type SePayWebhookBody struct {
@@ -203,16 +229,13 @@ func (s *Service) Routes(mux *http.ServeMux, authUserID func(*http.Request) (int
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
-		orderURL, appTransID, err := s.CreateOrder(r.Context(), userID, body.PackPoints)
+		order, err := s.CreateOrder(r.Context(), userID, body.PackPoints)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"order_url":    orderURL,
-			"app_trans_id": appTransID,
-		})
+		json.NewEncoder(w).Encode(order)
 	})
 
 	mux.HandleFunc("POST /webhooks/sepay", func(w http.ResponseWriter, r *http.Request) {
